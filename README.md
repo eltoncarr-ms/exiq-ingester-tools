@@ -34,8 +34,3 @@ Output is written to:
 - `binaries/`
 
 The script publishes every `*.csproj` under `tools/` to `binaries/` and then runs `merge-appsettings.ps1` to generate a single merged `binaries/appsettings.json`.
-
-## Branches
-
-- `main`: empty baseline branch used to initialize the repository.
-- `dev/bootstrap`: initial scaffold branch containing tools and build/publish scripts.
