@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "1.0",
+  "defaults": {
+    "eventHubRetention": "1.00:00:00",
+    "flush": {
+      "partialAfterRetentionFraction": 0.5,
+      "priorityImmediately": false,
+      "updateAfterPartial": false
+    }
+  },
+  "lifecycles": [
+    {
+      "name": "pocSession",
+      "version": "2026-06-19",
+      "match": {
+        "selectorEquals": {
+          "selector": "$.eventType",
+          "value": "pocSession"
+        }
+      },
+      "sessionKeySelector": "$.sessionId",
+      "eventTypeSelector": "$.eventType",
+      "eventKeySelector": "$.eventId",
+      "partSelector": "$.part",
+      "timestampSelector": "$.clientTime",
+      "parts": [
+        { "name": "sessionStart", "required": true },
+        { "name": "activity", "required": false },
+        { "name": "sessionEnd", "required": true }
+      ],
+      "flush": {
+        "whenRequiredPartsPresent": true,
+        "partialAfterRetentionFraction": 0.5,
+        "priorityImmediately": false,
+        "updateAfterPartial": false
+      },
+      "output": {
+        "container": "events",
+        "schemaVersion": "1.0",
+        "idTemplate": "{eventType}:{sessionId}:{eventId}",
+        "partitionKeyTemplate": "{sessionId}",
+        "writeMode": "upsert",
+        "payloadMappings": [
+          {
+            "target": "/timeline/startTime",
+            "sourcePart": "sessionStart",
+            "source": "$.clientTime",
+            "required": true
+          },
+          {
+            "target": "/timeline/endTime",
+            "sourcePart": "sessionEnd",
+            "source": "$.clientTime"
+          },
+          {
+            "target": "/model",
+            "constant": "sessionStart -> [activity]* -> sessionEnd"
+          }
+        ]
+      }
+    }
+  ]
+}
