@@ -39,3 +39,25 @@ export function formatDateTime(value: string): string {
 
   return date.toLocaleString();
 }
+
+export function formatAxisDateTime(epochMs: number): string {
+  if (!Number.isFinite(epochMs)) return '—';
+
+  return new Date(epochMs).toLocaleString(undefined, {
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+export function formatClockTime(epochMs: number): string {
+  if (!Number.isFinite(epochMs)) return '—';
+
+  return new Date(epochMs).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}

@@ -11,6 +11,87 @@ describe('parseBenchmarkArtifactText', () => {
     expect(artifact.iterations).toHaveLength(10);
   });
 
+  it('accepts optional pipeline data when it is present', () => {
+    const source = structuredClone(SYNTHETIC_ARTIFACTS[0]);
+    source.iterations[0].pipeline = {
+      snapshotAtUtc: '2026-01-15T17:01:00.000Z',
+      shardId: source.iterations[0].shardId,
+      windowStartUtc: source.iterations[0].windowStartUtc,
+      windowEndUtc: source.iterations[0].windowEndUtc,
+      currentTimeUtc: '2026-01-15T17:00:45.000Z',
+      watermarkUtc: '2026-01-15T16:51:00.000Z',
+      candidateWatermarkUtc: null,
+      checkpointAdvancedToUtc: null,
+      totalShardMessages: 42,
+      currentWindowMessages: 3,
+      backlogMessages: 2,
+      blockedMessages: 1,
+      statusCounts: {
+        pending: 1,
+        done: 1,
+        skipped: 0,
+        duplicateAcknowledged: 1,
+        poisoned: 0,
+      },
+      messages: [
+        {
+          ordinal: 0,
+          rowId: 'row-0',
+          sessionId: 'session-0',
+          enqueuedTimeUtc: '2026-01-15T16:50:00.000Z',
+          status: 'duplicateAcknowledged',
+          skipReason: null,
+        },
+      ],
+      events: [
+        {
+          atUtc: '2026-01-15T17:00:40.000Z',
+          kind: 'checkpoint',
+          label: 'Checkpoint blocked',
+          messageCount: 1,
+          watermarkUtc: null,
+        },
+      ],
+    };
+
+    const artifact = parseBenchmarkArtifactText(JSON.stringify(source), 'pipeline.json');
+
+    expect(artifact.iterations[0].pipeline?.statusCounts.duplicateAcknowledged).toBe(1);
+    expect(artifact.iterations[0].pipeline?.events[0].kind).toBe('checkpoint');
+  });
+
+  it('rejects malformed optional pipeline fields with the field path', () => {
+    const source = structuredClone(SYNTHETIC_ARTIFACTS[0]);
+    source.iterations[0].pipeline = {
+      snapshotAtUtc: '2026-01-15T17:01:00.000Z',
+      shardId: source.iterations[0].shardId,
+      windowStartUtc: source.iterations[0].windowStartUtc,
+      windowEndUtc: source.iterations[0].windowEndUtc,
+      currentTimeUtc: '2026-01-15T17:00:45.000Z',
+      watermarkUtc: null,
+      candidateWatermarkUtc: null,
+      checkpointAdvancedToUtc: null,
+      totalShardMessages: 42,
+      currentWindowMessages: 3,
+      backlogMessages: 2,
+      blockedMessages: 1,
+      statusCounts: {
+        pending: 1,
+        done: 1,
+        skipped: 0,
+        duplicateAcknowledged: 0,
+        poisoned: 0,
+      },
+      messages: [{ ordinal: 0, rowId: null, sessionId: null, enqueuedTimeUtc: '2026-01-15T16:50:00.000Z', status: 'pending' }],
+      events: [],
+    };
+    (source.iterations[0].pipeline!.messages[0] as { status: unknown }).status = 'unknown';
+
+    expect(() => parseBenchmarkArtifactText(JSON.stringify(source), 'bad-pipeline.json')).toThrow(
+      /bad-pipeline\.json: artifact\.iterations\[0\]\.pipeline\.messages\[0\]\.status/,
+    );
+  });
+
   it('accepts schemaVersion 1 benchmark summary artifacts', () => {
     const summaryArtifact = {
       schemaVersion: 1,

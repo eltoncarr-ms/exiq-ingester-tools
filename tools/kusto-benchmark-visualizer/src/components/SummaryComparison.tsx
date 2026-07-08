@@ -6,6 +6,8 @@ interface SummaryComparisonProps {
   runs: RunAnalysis[];
   summaryRows?: SummaryRow[];
   selectedRunId: string | null;
+  timeRangeLabel: string;
+  visiblePointCount: number;
   onSelectRun: (id: string) => void;
 }
 
@@ -23,23 +25,27 @@ function rowDelta(row: SummaryRow, average: SummaryRow | null): number | null {
   return average ? percentDelta(row.throughputEventsPerSecond, average.throughputEventsPerSecond) : null;
 }
 
-export function SummaryComparison({ runs, summaryRows = [], selectedRunId, onSelectRun }: SummaryComparisonProps) {
+export function SummaryComparison({ runs, summaryRows = [], selectedRunId, timeRangeLabel, visiblePointCount, onSelectRun }: SummaryComparisonProps) {
   const average = buildAverageSummaryRow(runs);
   const selected = runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null;
+  const selectedRow = selected?.summaryRow;
   const totalEvents = runs.reduce((sum, run) => sum + run.summaryRow.eventsFinalized, 0);
-  const totalFlushes = runs.reduce((sum, run) => sum + run.summaryRow.fullFlushes + run.summaryRow.partialFlushes, 0);
 
   return (
-    <Panel title="Run comparison" eyebrow="averaged baseline summary">
+    <Panel title="Run stats" eyebrow="selected benchmark run" description="Headline cards show full-run totals. The chart window controls which points render in the timeline and metric charts.">
       <div className="metric-strip">
-        <MetricCard label="Loaded runs" value={formatNumber(runs.length, 0)} hint="JSON artifacts in memory" />
-        <MetricCard label="Loaded summaries" value={formatNumber(summaryRows.length, 0)} hint="averaged baseline artifacts" />
-        <MetricCard label="Average throughput" value={average ? formatRate(average.throughputEventsPerSecond) : '—'} hint="mean across loaded runs" />
-        <MetricCard label="Events finalized" value={formatNumber(totalEvents, 0)} hint="sum across loaded runs" />
-        <MetricCard label="Flushes" value={formatNumber(totalFlushes, 0)} hint="partial + full flush count" />
+        <MetricCard label="Duration" value={selectedRow ? formatDuration(selectedRow.durationMs) : '—'} hint="full run elapsed wall-clock time" />
+        <MetricCard label="Rows processed" value={selected ? formatNumber(selected.artifact.summary.messagesProcessed, 0) : '—'} hint="source messages processed" />
+        <MetricCard label="Events finalized" value={selectedRow ? formatNumber(selectedRow.eventsFinalized, 0) : '—'} hint="documents sent or attempted" />
+        <MetricCard label="Throughput" value={selectedRow ? formatRate(selectedRow.throughputEventsPerSecond) : '—'} hint="full-run events per second" />
+        <MetricCard label="Checkpoints" value={selected ? formatNumber(selected.artifact.summary.checkpointAdvancements, 0) : '—'} hint="successful checkpoint advancements" />
+        <MetricCard label="Chart window" value={timeRangeLabel} hint={`${formatNumber(visiblePointCount, 0)} iteration point(s) visible`} />
       </div>
 
       <div className="comparison">
+        <div className="comparison__caption">
+          Loaded artifacts: {formatNumber(runs.length, 0)} run(s), {formatNumber(summaryRows.length, 0)} summary artifact(s), {formatNumber(totalEvents, 0)} total finalized event(s).
+        </div>
         <table>
           <thead>
             <tr>

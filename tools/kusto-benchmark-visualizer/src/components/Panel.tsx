@@ -3,17 +3,19 @@ import type { ReactNode } from 'react';
 interface PanelProps {
   title: string;
   eyebrow?: string;
+  description?: string;
   actions?: ReactNode;
   children: ReactNode;
 }
 
-export function Panel({ title, eyebrow, actions, children }: PanelProps) {
+export function Panel({ title, eyebrow, description, actions, children }: PanelProps) {
   return (
     <section className="panel">
       <header className="panel__head">
         <div>
           {eyebrow && <div className="panel__eyebrow">{eyebrow}</div>}
           <h2>{title}</h2>
+          {description && <p className="panel__description">{description}</p>}
         </div>
         {actions && <div className="panel__actions">{actions}</div>}
       </header>

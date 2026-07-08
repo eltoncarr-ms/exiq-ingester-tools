@@ -2,22 +2,43 @@ import { useCallback, useRef, useState, type ChangeEvent, type DragEvent } from 
 import { parseBenchmarkFileText, BenchmarkLoadError } from '../benchmark/parse';
 import type { BenchmarkArtifact, BenchmarkSummaryArtifact } from '../benchmark/types';
 
+export interface BenchmarkFileHandle {
+  name: string;
+  getFile: () => Promise<File>;
+}
+
+interface OpenFilePickerOptions {
+  multiple?: boolean;
+  types?: Array<{
+    description?: string;
+    accept: Record<string, string[]>;
+  }>;
+}
+
+declare global {
+  interface Window {
+    showOpenFilePicker?: (options?: OpenFilePickerOptions) => Promise<BenchmarkFileHandle[]>;
+  }
+}
+
 export type ParsedArtifact =
   | {
       kind: 'run';
       artifact: BenchmarkArtifact;
       sourceName: string;
+      watchHandle?: BenchmarkFileHandle;
+      watchKey?: string;
     }
   | {
       kind: 'summary';
       artifact: BenchmarkSummaryArtifact;
       sourceName: string;
+      watchHandle?: BenchmarkFileHandle;
+      watchKey?: string;
     };
 
 interface DropZoneProps {
-  compact?: boolean;
   onArtifacts: (artifacts: ParsedArtifact[]) => void;
-  onLoadSamples: () => void;
 }
 
 async function readFiles(files: FileList | File[]): Promise<ParsedArtifact[]> {
@@ -34,6 +55,7 @@ async function readFiles(files: FileList | File[]): Promise<ParsedArtifact[]> {
       } else {
         artifacts.push({ kind: 'summary', artifact: parsed.artifact, sourceName: file.name });
       }
+
     } catch (error) {
       failures.push(error instanceof BenchmarkLoadError ? error.message : `${file.name}: failed to load.`);
     }
@@ -50,7 +72,33 @@ async function readFiles(files: FileList | File[]): Promise<ParsedArtifact[]> {
   return artifacts;
 }
 
-export function DropZone({ compact = false, onArtifacts, onLoadSamples }: DropZoneProps) {
+export async function readBenchmarkFileHandles(handles: BenchmarkFileHandle[]): Promise<ParsedArtifact[]> {
+  const artifacts: ParsedArtifact[] = [];
+  const failures: string[] = [];
+
+  for (const [index, handle] of handles.entries()) {
+    try {
+      const file = await handle.getFile();
+      const parsed = parseBenchmarkFileText(await file.text(), handle.name);
+      const watchKey = `live:${handle.name}:${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${index}`}`;
+      if (parsed.kind === 'run') {
+        artifacts.push({ kind: 'run', artifact: parsed.artifact, sourceName: handle.name, watchHandle: handle, watchKey });
+      } else {
+        artifacts.push({ kind: 'summary', artifact: parsed.artifact, sourceName: handle.name, watchHandle: handle, watchKey });
+      }
+    } catch (error) {
+      failures.push(error instanceof BenchmarkLoadError ? error.message : `${handle.name}: failed to load.`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new BenchmarkLoadError(failures.join(' '));
+  }
+
+  return artifacts;
+}
+
+export function DropZone({ onArtifacts }: DropZoneProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -92,7 +140,7 @@ export function DropZone({ compact = false, onArtifacts, onLoadSamples }: DropZo
   );
 
   return (
-    <div className={`dropzone ${compact ? 'dropzone--compact' : ''}`}>
+    <div className="dropzone">
       <div
         className={`dropzone__target ${dragOver ? 'dropzone__target--over' : ''}`}
         role="button"
@@ -106,13 +154,10 @@ export function DropZone({ compact = false, onArtifacts, onLoadSamples }: DropZo
         onDrop={onDrop}
       >
         <div className="dropzone__icon">↧</div>
-        <div className="dropzone__title">{busy ? 'Loading…' : compact ? 'Add artifact' : 'Drop benchmark JSON here'}</div>
+        <div className="dropzone__title">{busy ? 'Loading…' : 'Drop benchmark JSON here'}</div>
         <div className="dropzone__hint">schemaVersion 1 artifact, or click to choose one or many files</div>
         <input ref={inputRef} className="dropzone__input" type="file" accept=".json,application/json" multiple onChange={onPick} />
       </div>
-      <button className="btn btn--ghost" type="button" onClick={onLoadSamples} disabled={busy}>
-        Load synthetic samples
-      </button>
       {error && (
         <div className="dropzone__error" role="alert">
           {error}

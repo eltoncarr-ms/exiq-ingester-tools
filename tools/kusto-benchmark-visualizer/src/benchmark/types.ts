@@ -58,6 +58,53 @@ export interface IterationCheckpoint {
   blockedDurationMs: number;
 }
 
+export type PipelineMessageStatus = 'pending' | 'done' | 'skipped' | 'duplicateAcknowledged' | 'poisoned';
+
+export type PipelineEventKind = 'read' | 'rehydrate' | 'process' | 'flush' | 'checkpoint' | 'blocked';
+
+export interface PipelineStatusCounts {
+  pending: number;
+  done: number;
+  skipped: number;
+  duplicateAcknowledged: number;
+  poisoned: number;
+}
+
+export interface PipelineMessageSample {
+  ordinal: number;
+  rowId: string | null;
+  sessionId: string | null;
+  enqueuedTimeUtc: string;
+  status: PipelineMessageStatus;
+  skipReason?: string | null;
+}
+
+export interface PipelineEvent {
+  atUtc: string;
+  kind: PipelineEventKind;
+  label: string;
+  messageCount?: number;
+  watermarkUtc?: string | null;
+}
+
+export interface IterationPipeline {
+  snapshotAtUtc: string;
+  shardId: string;
+  windowStartUtc: string | null;
+  windowEndUtc: string | null;
+  currentTimeUtc: string;
+  watermarkUtc: string | null;
+  candidateWatermarkUtc: string | null;
+  checkpointAdvancedToUtc: string | null;
+  totalShardMessages: number;
+  currentWindowMessages: number;
+  backlogMessages: number;
+  blockedMessages: number;
+  statusCounts: PipelineStatusCounts;
+  messages: PipelineMessageSample[];
+  events: PipelineEvent[];
+}
+
 export interface BenchmarkIteration {
   iterationId: string;
   clientId: string;
@@ -70,6 +117,7 @@ export interface BenchmarkIteration {
   counts: CountMetrics;
   memory: MemoryMetrics;
   checkpoint: IterationCheckpoint;
+  pipeline?: IterationPipeline;
 }
 
 export interface MemorySample {

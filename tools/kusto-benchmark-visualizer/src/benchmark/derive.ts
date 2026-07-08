@@ -4,6 +4,9 @@ import type {
   BenchmarkSummary,
   BenchmarkSummaryArtifact,
   MemoryMetrics,
+  PipelineEvent,
+  PipelineMessageSample,
+  PipelineStatusCounts,
   StageTimingKey,
   TimingMetrics,
 } from './types';
@@ -17,6 +20,27 @@ export const STAGE_DEFINITIONS: ReadonlyArray<{ key: StageTimingKey; label: stri
   { key: 'flush', label: 'Flush', color: '#f59e0b' },
   { key: 'advanceCheckpoint', label: 'Advance checkpoint', color: '#f472b6' },
 ];
+
+export const UNACCOUNTED_STAGE = {
+  key: 'unaccounted',
+  label: 'Unaccounted',
+  color: '#64748b',
+} as const;
+
+export type TimelineStageKey = StageTimingKey | typeof UNACCOUNTED_STAGE.key;
+
+export const TIMELINE_STAGE_DEFINITIONS: ReadonlyArray<{ key: TimelineStageKey; label: string; color: string }> = [
+  ...STAGE_DEFINITIONS,
+  UNACCOUNTED_STAGE,
+];
+
+export const TIME_RANGES = [
+  { key: 'all', label: 'All', durationMs: null },
+  { key: 'last-5m', label: 'Last 5 min', durationMs: 5 * 60 * 1000 },
+  { key: 'last-15m', label: 'Last 15 min', durationMs: 15 * 60 * 1000 },
+] as const;
+
+export type TimeRangeKey = (typeof TIME_RANGES)[number]['key'];
 
 const TIMING_KEYS: Array<keyof TimingMetrics> = [
   'leaseAcquire',
@@ -33,18 +57,22 @@ export interface TimelineSegment {
   iterationId: string;
   clientId: string;
   shardId: string;
-  stageKey: StageTimingKey;
+  stageKey: TimelineStageKey;
   stageLabel: string;
   color: string;
   startMs: number;
   endMs: number;
+  startAtMs: number;
+  endAtMs: number;
   durationMs: number;
+  originalDurationMs: number;
 }
 
 export interface SeriesPoint {
   iterationId: string;
   label: string;
   xMs: number;
+  xAtMs: number;
   value: number;
 }
 
@@ -52,6 +80,7 @@ export interface CheckpointPoint {
   iterationId: string;
   label: string;
   xMs: number;
+  xAtMs: number;
   advancedTo: number | null;
   upper: number | null;
   rawAdvancedTo: unknown;
@@ -62,6 +91,7 @@ export interface FlushPoint {
   iterationId: string;
   label: string;
   xMs: number;
+  xAtMs: number;
   fullFlushes: number;
   partialFlushes: number;
   flushDocuments: number;
@@ -71,6 +101,7 @@ export interface MemoryPoint {
   iterationId: string;
   label: string;
   xMs: number;
+  xAtMs: number;
   managedMiB: number;
   workingSetMiB: number;
   gcHeapMiB: number;
@@ -93,6 +124,39 @@ export interface SummaryRow {
   blockedDurationMs: number;
 }
 
+export interface PipelineWindowSnapshot {
+  source: 'pipeline' | 'aggregate';
+  iterationId: string;
+  clientId: string;
+  shardId: string;
+  observedAtUtc: string;
+  observedAtMs: number;
+  windowStartUtc: string | null;
+  windowEndUtc: string | null;
+  currentTimeUtc: string;
+  watermarkUtc: string | null;
+  candidateWatermarkUtc: string | null;
+  checkpointAdvancedToUtc: string | null;
+  rawCheckpointAdvancedTo: unknown;
+  currentWindowMessages: number;
+  totalShardMessages: number;
+  backlogMessages: number;
+  blockedMessages: number;
+  statusCounts: PipelineStatusCounts;
+  messages: PipelineMessageSample[];
+  events: PipelineEvent[];
+  isIncomplete: boolean;
+}
+
+export interface PipelineShardOption {
+  shardId: string;
+  label: string;
+  iterationCount: number;
+  latestObservedAtMs: number;
+  hasPipeline: boolean;
+  hasIncompletePipeline: boolean;
+}
+
 export interface RunAnalysis {
   id: string;
   label: string;
@@ -103,6 +167,9 @@ export interface RunAnalysis {
   completedAtMs: number;
   durationMs: number;
   timelineEndMs: number;
+  timelineStartAtMs: number;
+  timelineEndAtMs: number;
+  latestObservedAtMs: number;
   timelineSegments: TimelineSegment[];
   throughputPoints: SeriesPoint[];
   backlogPoints: SeriesPoint[];
@@ -110,6 +177,8 @@ export interface RunAnalysis {
   checkpointPoints: CheckpointPoint[];
   flushPoints: FlushPoint[];
   memoryPoints: MemoryPoint[];
+  pipelineSnapshots: PipelineWindowSnapshot[];
+  shardOptions: PipelineShardOption[];
   summaryRow: SummaryRow;
 }
 
@@ -168,6 +237,18 @@ function relativeMs(value: unknown, originMs: number, fallback: number): number 
   return Math.max(0, epoch - originMs);
 }
 
+function finiteMax(values: number[], fallback: number): number {
+  const finite = values.filter((value) => Number.isFinite(value));
+
+  return finite.length > 0 ? Math.max(...finite) : fallback;
+}
+
+function finiteMin(values: number[], fallback: number): number {
+  const finite = values.filter((value) => Number.isFinite(value));
+
+  return finite.length > 0 ? Math.min(...finite) : fallback;
+}
+
 function iterationDurationMs(iteration: BenchmarkIteration): number {
   const explicit = asNumber(iteration.timingsMs?.total);
   if (explicit > 0) return explicit;
@@ -187,15 +268,124 @@ function bytesToMiB(value: number): number {
 
 function buildMemoryFallback(iteration: BenchmarkIteration, xMs: number): MemoryPoint {
   const memory = iteration.memory ?? ({} as MemoryMetrics);
+  const completedAt = toEpochMs(iteration.completedAtUtc);
 
   return {
     iterationId: iteration.iterationId,
     label: iteration.iterationId,
     xMs,
+    xAtMs: completedAt ?? xMs,
     managedMiB: bytesToMiB(asNumber(memory.managedBytes)),
     workingSetMiB: bytesToMiB(asNumber(memory.workingSetBytes)),
     gcHeapMiB: bytesToMiB(asNumber(memory.gcHeapBytes)),
   };
+}
+
+function fallbackStatusCounts(iteration: BenchmarkIteration): PipelineStatusCounts {
+  const rowsFetched = asNumber(iteration.counts?.rowsFetched);
+  const processed = asNumber(iteration.counts?.messagesProcessed);
+
+  return {
+    pending: asNumber(iteration.counts?.backlogMessages),
+    done: processed,
+    skipped: Math.max(0, rowsFetched - processed),
+    duplicateAcknowledged: 0,
+    poisoned: 0,
+  };
+}
+
+function isPipelineIncomplete(iteration: BenchmarkIteration): boolean {
+  const pipeline = iteration.pipeline;
+  if (!pipeline) return false;
+
+  const pendingOrBlocked = asNumber(pipeline.statusCounts.pending) > 0 || asNumber(pipeline.blockedMessages) > 0;
+  if (pendingOrBlocked || pipeline.checkpointAdvancedToUtc === null) return true;
+
+  const checkpointAt = toEpochMs(pipeline.checkpointAdvancedToUtc);
+  const windowEndAt = toEpochMs(pipeline.windowEndUtc);
+  if (checkpointAt !== null && windowEndAt !== null) return checkpointAt < windowEndAt;
+
+  const completedAt = toEpochMs(iteration.completedAtUtc);
+  const observedAt = toEpochMs(pipeline.snapshotAtUtc) ?? toEpochMs(pipeline.currentTimeUtc);
+
+  return completedAt !== null && observedAt !== null && observedAt < completedAt;
+}
+
+function buildPipelineSnapshot(iteration: BenchmarkIteration, totalShardMessages: number): PipelineWindowSnapshot {
+  const pipeline = iteration.pipeline;
+  if (pipeline) {
+    const observedAtUtc = pipeline.snapshotAtUtc;
+    const observedAtMs = toEpochMs(observedAtUtc) ?? toEpochMs(pipeline.currentTimeUtc) ?? toEpochMs(iteration.completedAtUtc) ?? 0;
+
+    return {
+      source: 'pipeline',
+      iterationId: iteration.iterationId,
+      clientId: iteration.clientId,
+      shardId: iteration.shardId,
+      observedAtUtc,
+      observedAtMs,
+      windowStartUtc: pipeline.windowStartUtc,
+      windowEndUtc: pipeline.windowEndUtc,
+      currentTimeUtc: pipeline.currentTimeUtc,
+      watermarkUtc: pipeline.watermarkUtc,
+      candidateWatermarkUtc: pipeline.candidateWatermarkUtc,
+      checkpointAdvancedToUtc: pipeline.checkpointAdvancedToUtc,
+      rawCheckpointAdvancedTo: pipeline.checkpointAdvancedToUtc,
+      currentWindowMessages: asNumber(pipeline.currentWindowMessages),
+      totalShardMessages: asNumber(pipeline.totalShardMessages),
+      backlogMessages: asNumber(pipeline.backlogMessages),
+      blockedMessages: asNumber(pipeline.blockedMessages),
+      statusCounts: pipeline.statusCounts,
+      messages: pipeline.messages,
+      events: pipeline.events,
+      isIncomplete: isPipelineIncomplete(iteration),
+    };
+  }
+
+  const observedAtUtc = iteration.completedAtUtc || iteration.startedAtUtc;
+  const observedAtMs = toEpochMs(observedAtUtc) ?? toEpochMs(iteration.startedAtUtc) ?? 0;
+
+  return {
+    source: 'aggregate',
+    iterationId: iteration.iterationId,
+    clientId: iteration.clientId,
+    shardId: iteration.shardId,
+    observedAtUtc,
+    observedAtMs,
+    windowStartUtc: iteration.windowStartUtc,
+    windowEndUtc: iteration.windowEndUtc,
+    currentTimeUtc: observedAtUtc,
+    watermarkUtc: null,
+    candidateWatermarkUtc: null,
+    checkpointAdvancedToUtc: typeof iteration.checkpoint?.advancedTo === 'string' ? iteration.checkpoint.advancedTo : null,
+    rawCheckpointAdvancedTo: iteration.checkpoint?.advancedTo ?? null,
+    currentWindowMessages: asNumber(iteration.counts?.rowsFetched),
+    totalShardMessages,
+    backlogMessages: asNumber(iteration.counts?.backlogMessages),
+    blockedMessages: asNumber(iteration.counts?.blockedMessages),
+    statusCounts: fallbackStatusCounts(iteration),
+    messages: [],
+    events: [],
+    isIncomplete: false,
+  };
+}
+
+function buildShardOptions(snapshots: PipelineWindowSnapshot[]): PipelineShardOption[] {
+  const groups = new Map<string, PipelineWindowSnapshot[]>();
+  for (const snapshot of snapshots) {
+    groups.set(snapshot.shardId, [...(groups.get(snapshot.shardId) ?? []), snapshot]);
+  }
+
+  return [...groups.entries()]
+    .map(([shardId, shardSnapshots]) => ({
+      shardId,
+      label: shardId,
+      iterationCount: shardSnapshots.length,
+      latestObservedAtMs: finiteMax(shardSnapshots.map((snapshot) => snapshot.observedAtMs), 0),
+      hasPipeline: shardSnapshots.some((snapshot) => snapshot.source === 'pipeline'),
+      hasIncompletePipeline: shardSnapshots.some((snapshot) => snapshot.source === 'pipeline' && snapshot.isIncomplete),
+    }))
+    .sort((left, right) => left.shardId.localeCompare(right.shardId, undefined, { numeric: true }));
 }
 
 function summaryToRow(id: string, label: string, source: string, summary: BenchmarkSummary): SummaryRow {
@@ -248,15 +438,24 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
   const checkpointPoints: CheckpointPoint[] = [];
   const flushPoints: FlushPoint[] = [];
   const memoryFallback: MemoryPoint[] = [];
+  const shardMessageTotals = new Map<string, number>();
+
+  for (const iteration of sortedIterations) {
+    shardMessageTotals.set(iteration.shardId, (shardMessageTotals.get(iteration.shardId) ?? 0) + asNumber(iteration.counts?.rowsFetched));
+  }
 
   for (const iteration of sortedIterations) {
     const iterationStart = relativeMs(iteration.startedAtUtc, startedAtMs, timelineSegments.at(-1)?.endMs ?? 0);
+    const iterationStartAt = toEpochMs(iteration.startedAtUtc) ?? startedAtMs + iterationStart;
     const totalMs = iterationDurationMs(iteration);
     const completedRelative = relativeMs(iteration.completedAtUtc, startedAtMs, iterationStart + totalMs);
+    const completedAt = toEpochMs(iteration.completedAtUtc) ?? startedAtMs + completedRelative;
     let cursor = iterationStart;
+    let measuredDurationMs = 0;
 
     for (const stage of STAGE_DEFINITIONS) {
       const durationMs = asNumber(iteration.timingsMs?.[stage.key]);
+      measuredDurationMs += durationMs;
       timelineSegments.push({
         iterationId: iteration.iterationId,
         clientId: iteration.clientId,
@@ -266,9 +465,30 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
         color: stage.color,
         startMs: cursor,
         endMs: cursor + durationMs,
+        startAtMs: iterationStartAt + (cursor - iterationStart),
+        endAtMs: iterationStartAt + (cursor - iterationStart) + durationMs,
         durationMs,
+        originalDurationMs: durationMs,
       });
       cursor += durationMs;
+    }
+
+    const unaccountedMs = Math.max(0, totalMs - measuredDurationMs);
+    if (unaccountedMs > 0.5) {
+      timelineSegments.push({
+        iterationId: iteration.iterationId,
+        clientId: iteration.clientId,
+        shardId: iteration.shardId,
+        stageKey: UNACCOUNTED_STAGE.key,
+        stageLabel: UNACCOUNTED_STAGE.label,
+        color: UNACCOUNTED_STAGE.color,
+        startMs: iterationStart + measuredDurationMs,
+        endMs: iterationStart + totalMs,
+        startAtMs: iterationStartAt + measuredDurationMs,
+        endAtMs: iterationStartAt + totalMs,
+        durationMs: unaccountedMs,
+        originalDurationMs: unaccountedMs,
+      });
     }
 
     const label = `${iteration.iterationId} · ${iteration.shardId}`;
@@ -278,24 +498,28 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
       iterationId: iteration.iterationId,
       label,
       xMs: completedRelative,
+      xAtMs: completedAt,
       value: asNumber(iteration.counts?.eventsFinalized) / safeTotalSeconds,
     });
     backlogPoints.push({
       iterationId: iteration.iterationId,
       label,
       xMs: completedRelative,
+      xAtMs: completedAt,
       value: asNumber(iteration.counts?.backlogMessages),
     });
     blockerPoints.push({
       iterationId: iteration.iterationId,
       label,
       xMs: completedRelative,
+      xAtMs: completedAt,
       value: asNumber(iteration.checkpoint?.blockedDurationMs),
     });
     checkpointPoints.push({
       iterationId: iteration.iterationId,
       label,
       xMs: completedRelative,
+      xAtMs: completedAt,
       advancedTo: coerceComparable(iteration.checkpoint?.advancedTo),
       upper: coerceComparable(iteration.checkpoint?.upper),
       rawAdvancedTo: iteration.checkpoint?.advancedTo,
@@ -305,12 +529,17 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
       iterationId: iteration.iterationId,
       label,
       xMs: completedRelative,
+      xAtMs: completedAt,
       fullFlushes: asNumber(iteration.counts?.fullFlushes),
       partialFlushes: asNumber(iteration.counts?.partialFlushes),
       flushDocuments: asNumber(iteration.counts?.flushDocuments),
     });
     memoryFallback.push(buildMemoryFallback(iteration, completedRelative));
   }
+
+  const pipelineSnapshots = sortedIterations.map((iteration) =>
+    buildPipelineSnapshot(iteration, shardMessageTotals.get(iteration.shardId) ?? asNumber(iteration.counts?.rowsFetched)));
+  const shardOptions = buildShardOptions(pipelineSnapshots);
 
   const memoryPoints =
     artifact.memorySamples.length > 0
@@ -319,6 +548,7 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
             iterationId: sample.iterationId,
             label: sample.iterationId,
             xMs: relativeMs(sample.timestampUtc, startedAtMs, 0),
+            xAtMs: toEpochMs(sample.timestampUtc) ?? startedAtMs,
             managedMiB: bytesToMiB(asNumber(sample.managedBytes)),
             workingSetMiB: bytesToMiB(asNumber(sample.workingSetBytes)),
             gcHeapMiB: bytesToMiB(asNumber(sample.gcHeapBytes)),
@@ -331,6 +561,26 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
     completedAtMs - startedAtMs,
     ...timelineSegments.map((segment) => segment.endMs),
     ...throughputPoints.map((point) => point.xMs),
+  );
+  const timelineStartAtMs = finiteMin(
+    [
+      startedAtMs,
+      ...timelineSegments.map((segment) => segment.startAtMs),
+      ...throughputPoints.map((point) => point.xAtMs),
+      ...memoryPoints.map((point) => point.xAtMs),
+      ...pipelineSnapshots.map((snapshot) => toEpochMs(snapshot.windowStartUtc) ?? snapshot.observedAtMs),
+    ],
+    startedAtMs,
+  );
+  const latestObservedAtMs = finiteMax(
+    [
+      completedAtMs,
+      ...timelineSegments.map((segment) => segment.endAtMs),
+      ...throughputPoints.map((point) => point.xAtMs),
+      ...memoryPoints.map((point) => point.xAtMs),
+      ...pipelineSnapshots.map((snapshot) => snapshot.observedAtMs),
+    ],
+    completedAtMs,
   );
 
   const label = artifact.run.label || artifact.run.runId || sourceName;
@@ -345,6 +595,9 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
     completedAtMs,
     durationMs: Math.max(0, completedAtMs - startedAtMs),
     timelineEndMs,
+    timelineStartAtMs,
+    timelineEndAtMs: latestObservedAtMs,
+    latestObservedAtMs,
     timelineSegments,
     throughputPoints,
     backlogPoints,
@@ -352,6 +605,8 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
     checkpointPoints,
     flushPoints,
     memoryPoints,
+    pipelineSnapshots,
+    shardOptions,
     summaryRow: summaryToRow(id, label, artifact.run.source, artifact.summary),
   };
 }
@@ -366,6 +621,22 @@ export function makeLoadedRun(artifact: BenchmarkArtifact, fileName: string, ord
     artifact,
     analysis: buildRunAnalysis(artifact, fileName, id),
   };
+}
+
+export function makeLoadedRunWithId(artifact: BenchmarkArtifact, fileName: string, id: string): LoadedRun {
+  return {
+    id,
+    fileName,
+    artifact,
+    analysis: buildRunAnalysis(artifact, fileName, id),
+  };
+}
+
+export function upsertLoadedRun(runs: LoadedRun[], next: LoadedRun): LoadedRun[] {
+  const existingIndex = runs.findIndex((run) => run.id === next.id);
+  if (existingIndex === -1) return [...runs, next];
+
+  return runs.map((run, index) => (index === existingIndex ? next : run));
 }
 
 export function makeLoadedSummary(artifact: BenchmarkSummaryArtifact, fileName: string, ordinal: number): LoadedSummary {
@@ -417,4 +688,70 @@ export function percentDelta(value: number, baseline: number): number | null {
 
 export function totalTiming(timings: TimingMetrics): number {
   return TIMING_KEYS.reduce((sum, key) => sum + asNumber(timings[key]), 0);
+}
+
+export function selectStableShardId(options: PipelineShardOption[], selectedShardId: string | null): string | null {
+  if (selectedShardId && options.some((option) => option.shardId === selectedShardId)) return selectedShardId;
+  if (options.length === 0) return null;
+
+  const byRecentActivity = [...options].sort((left, right) => {
+    if (left.hasIncompletePipeline !== right.hasIncompletePipeline) return left.hasIncompletePipeline ? -1 : 1;
+    if (right.latestObservedAtMs !== left.latestObservedAtMs) return right.latestObservedAtMs - left.latestObservedAtMs;
+    return left.shardId.localeCompare(right.shardId, undefined, { numeric: true });
+  });
+
+  return byRecentActivity[0].shardId;
+}
+
+export function selectPipelineSnapshotForShard(analysis: RunAnalysis, shardId: string | null): PipelineWindowSnapshot | null {
+  const selectedShardId = selectStableShardId(analysis.shardOptions, shardId);
+  if (!selectedShardId) return null;
+
+  const snapshots = analysis.pipelineSnapshots
+    .filter((snapshot) => snapshot.shardId === selectedShardId)
+    .sort((left, right) => right.observedAtMs - left.observedAtMs);
+  const latestIncomplete = snapshots.find((snapshot) => snapshot.source === 'pipeline' && snapshot.isIncomplete);
+
+  return latestIncomplete ?? snapshots[0] ?? null;
+}
+
+export function filterRunAnalysisByRange(analysis: RunAnalysis, rangeKey: TimeRangeKey): RunAnalysis {
+  const range = TIME_RANGES.find((candidate) => candidate.key === rangeKey) ?? TIME_RANGES[0];
+  if (range.durationMs === null) return analysis;
+
+  const endAtMs = analysis.latestObservedAtMs;
+  const startAtMs = Math.max(analysis.timelineStartAtMs, endAtMs - range.durationMs);
+  const includePoint = (point: { xAtMs: number }) => point.xAtMs >= startAtMs && point.xAtMs <= endAtMs;
+
+  const timelineSegments = analysis.timelineSegments
+    .filter((segment) => segment.endAtMs >= startAtMs && segment.startAtMs <= endAtMs)
+    .map((segment) => {
+      const clippedStartAt = Math.max(segment.startAtMs, startAtMs);
+      const clippedEndAt = Math.min(segment.endAtMs, endAtMs);
+      const startOffset = clippedStartAt - analysis.startedAtMs;
+      const endOffset = clippedEndAt - analysis.startedAtMs;
+
+      return {
+        ...segment,
+        startAtMs: clippedStartAt,
+        endAtMs: clippedEndAt,
+        startMs: startOffset,
+        endMs: endOffset,
+        durationMs: Math.max(0, clippedEndAt - clippedStartAt),
+      };
+    });
+
+  return {
+    ...analysis,
+    timelineStartAtMs: startAtMs,
+    timelineEndAtMs: endAtMs,
+    timelineEndMs: Math.max(1, endAtMs - startAtMs),
+    timelineSegments,
+    throughputPoints: analysis.throughputPoints.filter(includePoint),
+    backlogPoints: analysis.backlogPoints.filter(includePoint),
+    blockerPoints: analysis.blockerPoints.filter(includePoint),
+    checkpointPoints: analysis.checkpointPoints.filter(includePoint),
+    flushPoints: analysis.flushPoints.filter(includePoint),
+    memoryPoints: analysis.memoryPoints.filter(includePoint),
+  };
 }

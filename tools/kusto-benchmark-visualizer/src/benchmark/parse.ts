@@ -53,6 +53,23 @@ function requireNumber(value: unknown, path: string): number {
   return value;
 }
 
+function requireOptionalNumber(value: unknown, path: string): number | undefined {
+  if (value === undefined) return undefined;
+
+  return requireNumber(value, path);
+}
+
+function requireEnum<T extends string>(value: unknown, path: string, allowed: readonly T[]): T {
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    throw new BenchmarkLoadError(`${path} must be one of: ${allowed.join(', ')}.`);
+  }
+
+  return value as T;
+}
+
+const PIPELINE_MESSAGE_STATUSES = ['pending', 'done', 'skipped', 'duplicateAcknowledged', 'poisoned'] as const;
+const PIPELINE_EVENT_KINDS = ['read', 'rehydrate', 'process', 'flush', 'checkpoint', 'blocked'] as const;
+
 export function parseBenchmarkArtifact(value: unknown): BenchmarkArtifact {
   const root = requireRecord(value, 'artifact');
 
@@ -147,6 +164,9 @@ function validateIteration(value: unknown, path: string): void {
   validateCounts(iteration.counts, `${path}.counts`);
   validateMemory(iteration.memory, `${path}.memory`);
   validateCheckpoint(iteration.checkpoint, `${path}.checkpoint`);
+  if (iteration.pipeline !== undefined) {
+    validatePipeline(iteration.pipeline, `${path}.pipeline`);
+  }
 }
 
 function validateSummary(value: unknown, path: string): void {
@@ -229,4 +249,54 @@ function validateMemorySample(value: unknown, path: string): void {
 function validateCheckpoint(value: unknown, path: string): void {
   const checkpoint = requireRecord(value, path);
   requireNumber(checkpoint.blockedDurationMs, `${path}.blockedDurationMs`);
+}
+
+function validatePipeline(value: unknown, path: string): void {
+  const pipeline = requireRecord(value, path);
+  requireString(pipeline.snapshotAtUtc, `${path}.snapshotAtUtc`);
+  requireString(pipeline.shardId, `${path}.shardId`);
+  requireOptionalString(pipeline.windowStartUtc, `${path}.windowStartUtc`);
+  requireOptionalString(pipeline.windowEndUtc, `${path}.windowEndUtc`);
+  requireString(pipeline.currentTimeUtc, `${path}.currentTimeUtc`);
+  requireOptionalString(pipeline.watermarkUtc, `${path}.watermarkUtc`);
+  requireOptionalString(pipeline.candidateWatermarkUtc, `${path}.candidateWatermarkUtc`);
+  requireOptionalString(pipeline.checkpointAdvancedToUtc, `${path}.checkpointAdvancedToUtc`);
+  requireNumber(pipeline.totalShardMessages, `${path}.totalShardMessages`);
+  requireNumber(pipeline.currentWindowMessages, `${path}.currentWindowMessages`);
+  requireNumber(pipeline.backlogMessages, `${path}.backlogMessages`);
+  requireNumber(pipeline.blockedMessages, `${path}.blockedMessages`);
+  validatePipelineStatusCounts(pipeline.statusCounts, `${path}.statusCounts`);
+  requireArray(pipeline.messages, `${path}.messages`).forEach((message, index) =>
+    validatePipelineMessage(message, `${path}.messages[${index}]`));
+  requireArray(pipeline.events, `${path}.events`).forEach((event, index) => validatePipelineEvent(event, `${path}.events[${index}]`));
+}
+
+function validatePipelineStatusCounts(value: unknown, path: string): void {
+  const counts = requireRecord(value, path);
+  for (const key of PIPELINE_MESSAGE_STATUSES) {
+    requireNumber(counts[key], `${path}.${key}`);
+  }
+}
+
+function validatePipelineMessage(value: unknown, path: string): void {
+  const message = requireRecord(value, path);
+  requireNumber(message.ordinal, `${path}.ordinal`);
+  requireOptionalString(message.rowId, `${path}.rowId`);
+  requireOptionalString(message.sessionId, `${path}.sessionId`);
+  requireString(message.enqueuedTimeUtc, `${path}.enqueuedTimeUtc`);
+  requireEnum(message.status, `${path}.status`, PIPELINE_MESSAGE_STATUSES);
+  if (message.skipReason !== undefined) {
+    requireOptionalString(message.skipReason, `${path}.skipReason`);
+  }
+}
+
+function validatePipelineEvent(value: unknown, path: string): void {
+  const event = requireRecord(value, path);
+  requireString(event.atUtc, `${path}.atUtc`);
+  requireEnum(event.kind, `${path}.kind`, PIPELINE_EVENT_KINDS);
+  requireString(event.label, `${path}.label`);
+  requireOptionalNumber(event.messageCount, `${path}.messageCount`);
+  if (event.watermarkUtc !== undefined) {
+    requireOptionalString(event.watermarkUtc, `${path}.watermarkUtc`);
+  }
 }

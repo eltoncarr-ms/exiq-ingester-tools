@@ -1,5 +1,5 @@
-import { STAGE_DEFINITIONS, type RunAnalysis } from '../benchmark/derive';
-import { formatDuration } from '../benchmark/format';
+import { TIMELINE_STAGE_DEFINITIONS, type RunAnalysis } from '../benchmark/derive';
+import { formatAxisDateTime, formatDuration } from '../benchmark/format';
 import { Panel } from './Panel';
 
 interface TimelineProps {
@@ -12,24 +12,29 @@ export function Timeline({ analysis }: TimelineProps) {
   const padLeft = 146;
   const padRight = 20;
   const padTop = 24;
-  const height = padTop + STAGE_DEFINITIONS.length * rowHeight + 28;
+  const height = padTop + TIMELINE_STAGE_DEFINITIONS.length * rowHeight + 34;
   const innerWidth = width - padLeft - padRight;
-  const timelineEnd = Math.max(analysis.timelineEndMs, 1);
-  const xFor = (ms: number) => padLeft + (Math.max(0, ms) / timelineEnd) * innerWidth;
+  const timelineStart = analysis.timelineStartAtMs;
+  const timelineEnd = Math.max(analysis.timelineEndAtMs, timelineStart + 1);
+  const xFor = (epochMs: number) => padLeft + ((Math.max(timelineStart, epochMs) - timelineStart) / (timelineEnd - timelineStart)) * innerWidth;
 
   return (
-    <Panel title="Ingestion stage timeline" eyebrow={analysis.label}>
+    <Panel
+      title="Ingestion stage timeline"
+      eyebrow={analysis.label}
+      description="Each lane shows when a benchmark stage ran during wall-clock time. Bars are completed shard iterations; the Unaccounted lane is elapsed time not attributed to named benchmark stages."
+    >
       <svg className="timeline" viewBox={`0 0 ${width} ${height}`} role="img">
         <line className="timeline__axis" x1={padLeft} x2={width - padRight} y1={height - 22} y2={height - 22} />
-        {[0, timelineEnd / 2, timelineEnd].map((tick) => (
+        {[timelineStart, timelineStart + (timelineEnd - timelineStart) / 2, timelineEnd].map((tick) => (
           <g key={tick}>
             <line className="timeline__grid" x1={xFor(tick)} x2={xFor(tick)} y1={padTop - 10} y2={height - 22} />
-            <text className="timeline__tick" x={xFor(tick)} y={height - 6} textAnchor={tick === 0 ? 'start' : tick === timelineEnd ? 'end' : 'middle'}>
-              {formatDuration(tick)}
+            <text className="timeline__tick" x={xFor(tick)} y={height - 6} textAnchor={tick === timelineStart ? 'start' : tick === timelineEnd ? 'end' : 'middle'}>
+              {formatAxisDateTime(tick)}
             </text>
           </g>
         ))}
-        {STAGE_DEFINITIONS.map((stage, row) => {
+        {TIMELINE_STAGE_DEFINITIONS.map((stage, row) => {
           const y = padTop + row * rowHeight;
           const segments = analysis.timelineSegments.filter((segment) => segment.stageKey === stage.key && segment.durationMs > 0);
 
@@ -40,8 +45,8 @@ export function Timeline({ analysis }: TimelineProps) {
               </text>
               <line className="timeline__lane" x1={padLeft} x2={width - padRight} y1={y + 16} y2={y + 16} />
               {segments.map((segment) => {
-                const x = xFor(segment.startMs);
-                const barWidth = Math.max(2, xFor(segment.endMs) - x);
+               const x = xFor(segment.startAtMs);
+               const barWidth = Math.max(2, xFor(segment.endAtMs) - x);
                 return (
                   <rect
                     key={`${segment.iterationId}-${segment.stageKey}`}
@@ -55,6 +60,7 @@ export function Timeline({ analysis }: TimelineProps) {
                   >
                     <title>
                       {segment.iterationId} · {segment.shardId} · {segment.stageLabel}: {formatDuration(segment.durationMs)}
+                      {segment.durationMs !== segment.originalDurationMs ? ` clipped from ${formatDuration(segment.originalDurationMs)}` : ''}
                     </title>
                   </rect>
                 );
