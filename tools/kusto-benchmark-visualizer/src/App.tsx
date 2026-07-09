@@ -17,6 +17,7 @@ import { BenchmarkLoadError } from './benchmark/parse';
 import { DropZone, readBenchmarkDataTransfer, readBenchmarkDirectoryHandle, readBenchmarkInputFiles, type BenchmarkDirectoryHandle, type ParsedArtifact } from './components/DropZone';
 import { ProcessingWindowPanel } from './components/ProcessingWindowPanel';
 import { SummaryComparison } from './components/SummaryComparison';
+import { ThroughputTrendCharts } from './components/ThroughputTrendCharts';
 
 export function App() {
   const [runs, setRuns] = useState<LoadedRun[]>([]);
@@ -268,12 +269,15 @@ export function App() {
           />
 
           {filteredAnalysis && (
-            <ProcessingWindowPanel
-              snapshot={selectedPipelineSnapshot}
-              shardOptions={filteredAnalysis.shardOptions}
-              selectedShardId={stableSelectedShardId}
-              onShardChange={setSelectedShardId}
-            />
+            <>
+              <ProcessingWindowPanel
+                snapshot={selectedPipelineSnapshot}
+                shardOptions={filteredAnalysis.shardOptions}
+                selectedShardId={stableSelectedShardId}
+                onShardChange={setSelectedShardId}
+              />
+              <ThroughputTrendCharts analysis={filteredAnalysis} />
+            </>
           )}
         </main>
       )}
