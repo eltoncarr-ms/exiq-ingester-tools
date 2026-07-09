@@ -27,10 +27,36 @@ function checkpointSeries(analysis: RunAnalysis) {
   ];
 }
 
+function parseUtc(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function chartDomain(analysis: RunAnalysis) {
+  const windowStarts = analysis.pipelineSnapshots
+    .map((candidate) => parseUtc(candidate.windowStartUtc))
+    .filter((value): value is number => value !== null);
+  const windowEnds = analysis.pipelineSnapshots
+    .map((candidate) => parseUtc(candidate.windowEndUtc))
+    .filter((value): value is number => value !== null);
+  if (windowStarts.length > 0 && windowEnds.length > 0) {
+    let startAtMs = Number.POSITIVE_INFINITY;
+    let endAtMs = Number.NEGATIVE_INFINITY;
+    for (const value of windowStarts) startAtMs = Math.min(startAtMs, value);
+    for (const value of windowEnds) endAtMs = Math.max(endAtMs, value);
+    if (Number.isFinite(startAtMs) && Number.isFinite(endAtMs) && endAtMs > startAtMs) {
+      return { startAtMs, endAtMs };
+    }
+  }
+
+  return { startAtMs: analysis.timelineStartAtMs, endAtMs: analysis.timelineEndAtMs };
+}
+
 export function MetricCharts({ analysis }: MetricChartsProps) {
   const [showPartial, setShowPartial] = useState(true);
   const [showFull, setShowFull] = useState(true);
-  const xDomain = { startAtMs: analysis.timelineStartAtMs, endAtMs: analysis.timelineEndAtMs };
+  const xDomain = chartDomain(analysis);
 
   return (
     <div className="metrics-grid">
@@ -96,7 +122,7 @@ export function MetricCharts({ analysis }: MetricChartsProps) {
       <Panel
         title="Flush volumes"
         eyebrow="documents per completed iteration"
-        description="Bar height is the number of documents sent to the sink. Full/partial markers describe the flush outcome classification for that iteration."
+        description="Each column is one completed iteration. The number is documents sent; height is relative volume; P/F badges show whether that iteration produced partial or full flushes."
         actions={
           <div className="toggle-row">
             <label>

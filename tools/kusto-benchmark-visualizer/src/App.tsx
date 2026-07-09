@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import {
   filterRunAnalysisByRange,
   makeLoadedRun,
@@ -13,11 +13,9 @@ import {
   type TimeRangeKey,
 } from './benchmark/derive';
 import { formatDateTime, formatDuration, formatNumber } from './benchmark/format';
-import { BenchmarkLoadError, parseBenchmarkFileText } from './benchmark/parse';
-import { DropZone, readBenchmarkFileHandles, type BenchmarkFileHandle, type ParsedArtifact } from './components/DropZone';
-import { MetricCharts } from './components/MetricCharts';
+import { BenchmarkLoadError } from './benchmark/parse';
+import { DropZone, readBenchmarkDataTransfer, readBenchmarkDirectoryHandle, readBenchmarkInputFiles, type BenchmarkDirectoryHandle, type ParsedArtifact } from './components/DropZone';
 import { ProcessingWindowPanel } from './components/ProcessingWindowPanel';
-import { QueueVisualizationPanel } from './components/QueueVisualizationPanel';
 import { SummaryComparison } from './components/SummaryComparison';
 
 export function App() {
@@ -29,6 +27,8 @@ export function App() {
   const [watchedFiles, setWatchedFiles] = useState<WatchedFile[]>([]);
   const [watchBusy, setWatchBusy] = useState(false);
   const [watchError, setWatchError] = useState<string | null>(null);
+  const [dragOverApp, setDragOverApp] = useState(false);
+  const [dropError, setDropError] = useState<string | null>(null);
   const analyses = useMemo(() => runs.map((run) => run.analysis), [runs]);
   const summaryRows = useMemo(() => summaries.map((summary) => summary.summaryRow), [summaries]);
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null;
@@ -47,7 +47,7 @@ export function App() {
   );
   const selectedRangeLabel = TIME_RANGES.find((range) => range.key === timeRange)?.label ?? 'All';
   const watchedFileSignature = useMemo(() => watchedFiles.map((file) => `${file.id}:${file.sourceName}`).join('|'), [watchedFiles]);
-  const supportsLiveWatch = typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function';
+  const supportsLiveWatch = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
   const hasLiveWatchError = Boolean(watchError) || watchedFiles.some((file) => file.lastError);
 
   const upsertParsedArtifact = (artifact: ParsedArtifact, ordinal: number) => {
@@ -58,9 +58,6 @@ export function App() {
         : makeLoadedRun(artifact.artifact, artifact.sourceName, ordinal);
       setRuns((current) => (artifact.watchKey ? upsertLoadedRun(current, loaded) : [...current, loaded]));
       setSelectedRunId(loaded.id);
-      if (artifact.watchHandle && artifact.watchKey) {
-        setWatchedFiles((current) => upsertWatchedFile(current, artifact.watchKey!, artifact.sourceName, artifact.watchHandle!));
-      }
       return;
     }
 
@@ -80,22 +77,38 @@ export function App() {
     setSelectedShardId(null);
     setWatchedFiles([]);
     setWatchError(null);
+    setDropError(null);
   };
 
+  const handleAppDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragOverApp(false);
+    setDropError(null);
+    if (event.dataTransfer.files.length === 0 && event.dataTransfer.items.length === 0) return;
+
+    try {
+      addArtifacts(await readBenchmarkInputFiles(await readBenchmarkDataTransfer(event.dataTransfer)));
+    } catch (caught) {
+      setDropError(caught instanceof Error ? caught.message : 'Failed to load dropped benchmark data.');
+    }
+  };
+
+  const withWatchKey = (artifacts: ParsedArtifact[], watchKey: string): ParsedArtifact[] =>
+    artifacts.map((artifact) => ({ ...artifact, watchKey }));
+
   const watchLiveFile = async () => {
-    if (!window.showOpenFilePicker) return;
+    if (!window.showDirectoryPicker) return;
 
     setWatchBusy(true);
     setWatchError(null);
     try {
-      const handles = await window.showOpenFilePicker({
-        multiple: true,
-        types: [{ description: 'Benchmark JSON artifacts', accept: { 'application/json': ['.json'] } }],
-      });
-      addArtifacts(await readBenchmarkFileHandles(handles));
+      const handle = await window.showDirectoryPicker();
+      const watchKey = `live-dir:${handle.name}:${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
+      addArtifacts(withWatchKey(await readBenchmarkDirectoryHandle(handle), watchKey));
+      setWatchedFiles((current) => upsertWatchedFile(current, watchKey, handle.name, handle));
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
-      setWatchError(caught instanceof Error ? caught.message : 'Failed to watch benchmark artifact.');
+      setWatchError(caught instanceof Error ? caught.message : 'Failed to stream benchmark folder.');
     } finally {
       setWatchBusy(false);
     }
@@ -108,19 +121,9 @@ export function App() {
     const refresh = async () => {
       for (const watched of watchedFiles) {
         try {
-          const file = await watched.handle.getFile();
-          const parsed = parseBenchmarkFileText(await file.text(), watched.sourceName);
+          const artifacts = withWatchKey(await readBenchmarkDirectoryHandle(watched.handle), watched.id);
           if (disposed) return;
-          if (parsed.kind === 'run') {
-            setRuns((current) => upsertLoadedRun(current, makeLoadedRunWithId(parsed.artifact, watched.sourceName, watched.id)));
-          } else {
-            setSummaries((current) => {
-              const loaded = makeLoadedSummary(parsed.artifact, watched.sourceName, Date.now());
-              return current.some((summary) => summary.fileName === watched.sourceName)
-                ? current.map((summary) => (summary.fileName === watched.sourceName ? loaded : summary))
-                : [...current, loaded];
-            });
-          }
+          addArtifacts(artifacts);
           setWatchedFiles((current) =>
             current.map((candidate) =>
               candidate.id === watched.id
@@ -141,7 +144,7 @@ export function App() {
       }
     };
 
-    const intervalId = window.setInterval(refresh, 2500);
+    const intervalId = window.setInterval(refresh, 250);
     void refresh();
     return () => {
       disposed = true;
@@ -156,7 +159,20 @@ export function App() {
   }, [selectedShardId, stableSelectedShardId]);
 
   return (
-    <div className="app">
+    <div
+      className={`app ${dragOverApp ? 'app--dragover' : ''}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDragOverApp(true);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget === event.target) {
+          setDragOverApp(false);
+        }
+      }}
+      onDrop={handleAppDrop}
+    >
+      {dragOverApp && <div className="app__drop-overlay">Drop benchmark run or iterations folder</div>}
       <header className="app__bar">
         <div className="app__brand">
           <span className="app__logo">◨</span>
@@ -193,7 +209,7 @@ export function App() {
               onClick={watchLiveFile}
               disabled={watchBusy}
             >
-              {watchedFiles.length > 0 ? `Live watch ${formatNumber(watchedFiles.length, 0)}` : 'Watch live file'}
+              {watchedFiles.length > 0 ? `Live stream ${formatNumber(watchedFiles.length, 0)}` : 'Live Stream'}
             </button>
           )}
           {summaries.length > 0 && <span className="tag tag--muted">{formatNumber(summaries.length, 0)} summaries</span>}
@@ -211,7 +227,7 @@ export function App() {
           <p className="app__welcome-note">
             Load one or more Kusto benchmark JSON artifacts to visualize stage timings, throughput, checkpoints, blocker delay, backlog,
             memory, and flush behavior.
-            {supportsLiveWatch ? ' Use the header control to watch a live benchmark file as it is refreshed.' : ''}
+            {supportsLiveWatch ? ' Use Live Stream to poll a benchmark run folder as it is refreshed.' : ''}
           </p>
         </main>
       ) : (
@@ -220,7 +236,7 @@ export function App() {
             <div className="run-hero__content">
               <p className="run-hero__eyebrow">{selectedRun ? 'Selected run' : 'Averaged summary'}</p>
               <h1>{selectedRun?.analysis.label ?? summaries.at(-1)?.artifact.label ?? 'Benchmark summary'}</h1>
-              {(watchedFiles.length > 0 || watchError) && (
+              {(watchedFiles.length > 0 || watchError || dropError) && (
                 <div className="run-hero__refreshes">
                   {watchedFiles.map((file) => (
                     <span key={file.id} className={file.lastError ? 'run-hero__refresh run-hero__refresh--error' : 'run-hero__refresh'}>
@@ -228,6 +244,7 @@ export function App() {
                     </span>
                   ))}
                   {watchError && <span className="run-hero__refresh run-hero__refresh--error">{watchError}</span>}
+                  {dropError && <span className="run-hero__refresh run-hero__refresh--error">{dropError}</span>}
                 </div>
               )}
               {selectedRun ? (
@@ -251,16 +268,12 @@ export function App() {
           />
 
           {filteredAnalysis && (
-            <>
-              <ProcessingWindowPanel
-                snapshot={selectedPipelineSnapshot}
-                shardOptions={filteredAnalysis.shardOptions}
-                selectedShardId={stableSelectedShardId}
-                onShardChange={setSelectedShardId}
-              />
-              <QueueVisualizationPanel snapshot={selectedPipelineSnapshot} />
-              <MetricCharts analysis={filteredAnalysis} />
-            </>
+            <ProcessingWindowPanel
+              snapshot={selectedPipelineSnapshot}
+              shardOptions={filteredAnalysis.shardOptions}
+              selectedShardId={stableSelectedShardId}
+              onShardChange={setSelectedShardId}
+            />
           )}
         </main>
       )}
@@ -271,12 +284,12 @@ export function App() {
 interface WatchedFile {
   id: string;
   sourceName: string;
-  handle: BenchmarkFileHandle;
+  handle: BenchmarkDirectoryHandle;
   lastRefreshAtUtc: string | null;
   lastError: string | null;
 }
 
-function upsertWatchedFile(files: WatchedFile[], id: string, sourceName: string, handle: BenchmarkFileHandle): WatchedFile[] {
+function upsertWatchedFile(files: WatchedFile[], id: string, sourceName: string, handle: BenchmarkDirectoryHandle): WatchedFile[] {
   const next: WatchedFile = { id, sourceName, handle, lastRefreshAtUtc: new Date().toISOString(), lastError: null };
   return files.some((file) => file.id === id) ? files.map((file) => (file.id === id ? next : file)) : [...files, next];
 }

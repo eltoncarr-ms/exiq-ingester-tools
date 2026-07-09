@@ -19,6 +19,14 @@ export interface TimingMetrics {
   flush: number;
   advanceCheckpoint: number;
   total: number;
+  kustoRead?: KustoReadTimings | null;
+}
+
+export interface KustoReadTimings {
+  queryBuild: number;
+  executeToFirstRow: number;
+  streamRows: number;
+  mapRows: number;
 }
 
 export interface CountMetrics {
@@ -60,7 +68,7 @@ export interface IterationCheckpoint {
 
 export type PipelineMessageStatus = 'pending' | 'done' | 'skipped' | 'duplicateAcknowledged' | 'poisoned';
 
-export type PipelineEventKind = 'read' | 'rehydrate' | 'process' | 'flush' | 'checkpoint' | 'blocked';
+export type PipelineEventKind = 'read' | 'rehydrate' | 'process' | 'flush' | 'checkpoint' | 'blocked' | 'duplicate';
 
 export interface PipelineStatusCounts {
   pending: number;

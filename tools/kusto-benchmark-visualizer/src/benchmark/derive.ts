@@ -124,6 +124,17 @@ export interface SummaryRow {
   blockedDurationMs: number;
 }
 
+export interface RunThroughputMetrics {
+  kustoReadThroughputRowsPerSec: number;
+  processingThroughputRowsPerSec: number;
+  eventThroughputEventsPerSec: number;
+  compressionRateRowsPerEvent: number | null;
+}
+
+export interface IterationThroughputMetrics extends RunThroughputMetrics {
+  iterationId: string;
+}
+
 export interface PipelineWindowSnapshot {
   source: 'pipeline' | 'aggregate';
   iterationId: string;
@@ -179,6 +190,8 @@ export interface RunAnalysis {
   memoryPoints: MemoryPoint[];
   pipelineSnapshots: PipelineWindowSnapshot[];
   shardOptions: PipelineShardOption[];
+  throughputMetrics: RunThroughputMetrics;
+  iterationThroughputMetrics: IterationThroughputMetrics[];
   summaryRow: SummaryRow;
 }
 
@@ -238,15 +251,25 @@ function relativeMs(value: unknown, originMs: number, fallback: number): number 
 }
 
 function finiteMax(values: number[], fallback: number): number {
-  const finite = values.filter((value) => Number.isFinite(value));
+  let result = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (Number.isFinite(value) && value > result) {
+      result = value;
+    }
+  }
 
-  return finite.length > 0 ? Math.max(...finite) : fallback;
+  return result === Number.NEGATIVE_INFINITY ? fallback : result;
 }
 
 function finiteMin(values: number[], fallback: number): number {
-  const finite = values.filter((value) => Number.isFinite(value));
+  let result = Number.POSITIVE_INFINITY;
+  for (const value of values) {
+    if (Number.isFinite(value) && value < result) {
+      result = value;
+    }
+  }
 
-  return finite.length > 0 ? Math.min(...finite) : fallback;
+  return result === Number.POSITIVE_INFINITY ? fallback : result;
 }
 
 function iterationDurationMs(iteration: BenchmarkIteration): number {
@@ -260,6 +283,56 @@ function iterationDurationMs(iteration: BenchmarkIteration): number {
   }
 
   return STAGE_DEFINITIONS.reduce((sum, stage) => sum + asNumber(iteration.timingsMs?.[stage.key]), 0);
+}
+
+function kustoReadMs(iteration: BenchmarkIteration): number {
+  const kustoRead = iteration.timingsMs?.kustoRead;
+  if (!kustoRead) return 0;
+
+  return (
+    asNumber(kustoRead.queryBuild) +
+    asNumber(kustoRead.executeToFirstRow) +
+    asNumber(kustoRead.streamRows) +
+    asNumber(kustoRead.mapRows)
+  );
+}
+
+function buildThroughputMetrics(iterations: BenchmarkIteration[]): RunThroughputMetrics {
+  let rowsFetched = 0;
+  let eventsFinalized = 0;
+  let totalMs = 0;
+  let totalKustoReadMs = 0;
+
+  for (const iteration of iterations) {
+    rowsFetched += asNumber(iteration.counts?.rowsFetched);
+    eventsFinalized += asNumber(iteration.counts?.eventsFinalized);
+    totalMs += asNumber(iteration.timingsMs?.total);
+    totalKustoReadMs += kustoReadMs(iteration);
+  }
+
+  return {
+    kustoReadThroughputRowsPerSec: totalKustoReadMs > 0 ? rowsFetched / (totalKustoReadMs / 1000) : 0,
+    processingThroughputRowsPerSec: totalMs > 0 ? rowsFetched / (totalMs / 1000) : 0,
+    eventThroughputEventsPerSec: totalMs > 0 ? eventsFinalized / (totalMs / 1000) : 0,
+    compressionRateRowsPerEvent: eventsFinalized > 0 ? rowsFetched / eventsFinalized : null,
+  };
+}
+
+function buildIterationThroughputMetrics(iterations: BenchmarkIteration[]): IterationThroughputMetrics[] {
+  return iterations.map((iteration) => {
+    const rowsFetched = asNumber(iteration.counts?.rowsFetched);
+    const eventsFinalized = asNumber(iteration.counts?.eventsFinalized);
+    const totalMs = asNumber(iteration.timingsMs?.total);
+    const readMs = kustoReadMs(iteration);
+
+    return {
+      iterationId: iteration.iterationId,
+      kustoReadThroughputRowsPerSec: readMs > 0 ? rowsFetched / (readMs / 1000) : 0,
+      processingThroughputRowsPerSec: totalMs > 0 ? rowsFetched / (totalMs / 1000) : 0,
+      eventThroughputEventsPerSec: totalMs > 0 ? eventsFinalized / (totalMs / 1000) : 0,
+      compressionRateRowsPerEvent: eventsFinalized > 0 ? rowsFetched / eventsFinalized : null,
+    };
+  });
 }
 
 function bytesToMiB(value: number): number {
@@ -450,6 +523,8 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
     const totalMs = iterationDurationMs(iteration);
     const completedRelative = relativeMs(iteration.completedAtUtc, startedAtMs, iterationStart + totalMs);
     const completedAt = toEpochMs(iteration.completedAtUtc) ?? startedAtMs + completedRelative;
+    const metricAt = toEpochMs(iteration.windowEndUtc) ?? completedAt;
+    const metricRelative = Math.max(0, metricAt - startedAtMs);
     let cursor = iterationStart;
     let measuredDurationMs = 0;
 
@@ -497,29 +572,29 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
     throughputPoints.push({
       iterationId: iteration.iterationId,
       label,
-      xMs: completedRelative,
-      xAtMs: completedAt,
+      xMs: metricRelative,
+      xAtMs: metricAt,
       value: asNumber(iteration.counts?.eventsFinalized) / safeTotalSeconds,
     });
     backlogPoints.push({
       iterationId: iteration.iterationId,
       label,
-      xMs: completedRelative,
-      xAtMs: completedAt,
+      xMs: metricRelative,
+      xAtMs: metricAt,
       value: asNumber(iteration.counts?.backlogMessages),
     });
     blockerPoints.push({
       iterationId: iteration.iterationId,
       label,
-      xMs: completedRelative,
-      xAtMs: completedAt,
+      xMs: metricRelative,
+      xAtMs: metricAt,
       value: asNumber(iteration.checkpoint?.blockedDurationMs),
     });
     checkpointPoints.push({
       iterationId: iteration.iterationId,
       label,
-      xMs: completedRelative,
-      xAtMs: completedAt,
+      xMs: metricRelative,
+      xAtMs: metricAt,
       advancedTo: coerceComparable(iteration.checkpoint?.advancedTo),
       upper: coerceComparable(iteration.checkpoint?.upper),
       rawAdvancedTo: iteration.checkpoint?.advancedTo,
@@ -528,8 +603,8 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
     flushPoints.push({
       iterationId: iteration.iterationId,
       label,
-      xMs: completedRelative,
-      xAtMs: completedAt,
+      xMs: metricRelative,
+      xAtMs: metricAt,
       fullFlushes: asNumber(iteration.counts?.fullFlushes),
       partialFlushes: asNumber(iteration.counts?.partialFlushes),
       flushDocuments: asNumber(iteration.counts?.flushDocuments),
@@ -556,11 +631,14 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
           .sort((left, right) => left.xMs - right.xMs)
       : memoryFallback;
 
-  const timelineEndMs = Math.max(
-    asNumber(artifact.summary.durationMs),
-    completedAtMs - startedAtMs,
-    ...timelineSegments.map((segment) => segment.endMs),
-    ...throughputPoints.map((point) => point.xMs),
+  const timelineEndMs = finiteMax(
+    [
+      asNumber(artifact.summary.durationMs),
+      completedAtMs - startedAtMs,
+      ...timelineSegments.map((segment) => segment.endMs),
+      ...throughputPoints.map((point) => point.xMs),
+    ],
+    0,
   );
   const timelineStartAtMs = finiteMin(
     [
@@ -607,6 +685,8 @@ export function buildRunAnalysis(artifact: BenchmarkArtifact, sourceName: string
     memoryPoints,
     pipelineSnapshots,
     shardOptions,
+    throughputMetrics: buildThroughputMetrics(sortedIterations),
+    iterationThroughputMetrics: buildIterationThroughputMetrics(sortedIterations),
     summaryRow: summaryToRow(id, label, artifact.run.source, artifact.summary),
   };
 }
@@ -675,7 +755,7 @@ export function buildAverageSummaryRow(runs: RunAnalysis[]): SummaryRow | null {
     partialFlushes: sum((run) => run.summaryRow.partialFlushes) / count,
     averageTotalMs: sum((run) => run.summaryRow.averageTotalMs) / count,
     averageBacklogMessages: sum((run) => run.summaryRow.averageBacklogMessages) / count,
-    maxBacklogMessages: Math.max(...runs.map((run) => run.summaryRow.maxBacklogMessages)),
+    maxBacklogMessages: finiteMax(runs.map((run) => run.summaryRow.maxBacklogMessages), 0),
     blockedDurationMs: sum((run) => run.summaryRow.blockedDurationMs) / count,
   };
 }

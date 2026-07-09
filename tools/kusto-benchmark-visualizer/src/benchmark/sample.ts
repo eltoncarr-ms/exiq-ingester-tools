@@ -77,7 +77,7 @@ function makeIteration(index: number, runStart: number, multiplier: number, clie
 
 function summarize(iterations: BenchmarkIteration[], startedAtUtc: string, completedAtUtc: string) {
   const durationMs = Date.parse(completedAtUtc) - Date.parse(startedAtUtc);
-  const averageTiming = (key: keyof TimingMetrics) =>
+  const averageTiming = (key: Exclude<keyof TimingMetrics, 'kustoRead'>) =>
     iterations.reduce((sum, iteration) => sum + iteration.timingsMs[key], 0) / iterations.length;
   const averageTimingsMs: TimingMetrics = {
     leaseAcquire: averageTiming('leaseAcquire'),

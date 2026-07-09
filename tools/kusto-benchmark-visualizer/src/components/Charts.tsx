@@ -20,6 +20,18 @@ function finiteValues(values: number[]): number[] {
   return values.filter((value) => Number.isFinite(value));
 }
 
+function extent(values: number[]): { min: number; max: number } | null {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (!Number.isFinite(value)) continue;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+
+  return min === Number.POSITIVE_INFINITY ? null : { min, max };
+}
+
 function scale(value: number, min: number, max: number, size: number): number {
   if (max <= min) return size / 2;
 
@@ -46,10 +58,16 @@ export function LineChart({
   const innerHeight = height - pad.top - pad.bottom;
   const xValues = finiteValues(allPoints.map((point) => point.xAtMs ?? point.xMs));
   const yValues = finiteValues(allPoints.map((point) => point.value));
-  const xMin = xDomain?.startAtMs ?? Math.min(...xValues);
-  const xMax = xDomain?.endAtMs ?? Math.max(...xValues);
-  const yMin = includeZero ? Math.min(0, ...yValues) : Math.min(...yValues);
-  const yMax = Math.max(includeZero ? 1 : yMin + 1, ...yValues);
+  const xExtent = extent(xValues);
+  const yExtent = extent(yValues);
+  if (!xExtent || !yExtent) {
+    return <div className="chart-empty">{emptyText}</div>;
+  }
+
+  const xMin = xDomain?.startAtMs ?? xExtent.min;
+  const xMax = xDomain?.endAtMs ?? xExtent.max;
+  const yMin = includeZero ? Math.min(0, yExtent.min) : yExtent.min;
+  const yMax = Math.max(includeZero ? 1 : yMin + 1, yExtent.max);
   const yTicks = [yMin, yMin + (yMax - yMin) / 2, yMax];
 
   const chart = (
@@ -137,16 +155,28 @@ export function StackedBarChart({ points, showFull, showPartial }: StackedBarCha
   const maxDocuments = Math.max(1, ...visiblePoints.map((point) => point.flushDocuments));
 
   return (
-    <div className="bar-chart" role="img" aria-label="Flush document volumes with full and partial flush markers">
+    <div className="bar-chart-wrap">
+      <div className="flush-explainer">
+        <span><strong>Number</strong> = documents sent</span>
+        <span><strong>Height</strong> = relative volume</span>
+        <span><strong>P/F</strong> = partial/full flush count</span>
+      </div>
+      <div className="bar-chart" role="img" aria-label="Flush document volumes with full and partial flush markers">
       {visiblePoints.map((point) => {
         const documentPct = (point.flushDocuments / maxDocuments) * 100;
+        const outcome =
+          point.fullFlushes > 0
+            ? `${formatNumber(point.fullFlushes, 0)} full flush${point.fullFlushes === 1 ? '' : 'es'}`
+            : point.partialFlushes > 0
+              ? `${formatNumber(point.partialFlushes, 0)} partial flush${point.partialFlushes === 1 ? '' : 'es'}`
+              : 'no flush classification';
 
         return (
           <div className="bar-chart__item" key={point.label}>
             <div className="bar-chart__docs">{formatNumber(point.flushDocuments, 0)}</div>
             <div
               className="bar-chart__bar"
-              title={`${point.label}: ${point.flushDocuments} documents, ${point.partialFlushes} partial flush(es), ${point.fullFlushes} full flush(es)`}
+              title={`${point.label}: ${point.flushDocuments} documents sent, ${outcome}`}
             >
               <span className="bar-chart__seg bar-chart__seg--docs" style={{ height: `${documentPct}%` }} />
             </div>
@@ -158,6 +188,7 @@ export function StackedBarChart({ points, showFull, showPartial }: StackedBarCha
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

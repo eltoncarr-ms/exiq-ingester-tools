@@ -131,6 +131,26 @@ describe('buildRunAnalysis', () => {
     expect(filtered.pipelineSnapshots).toHaveLength(analysis.pipelineSnapshots.length);
     expect(selectPipelineSnapshotForShard(filtered, 'shard-1')?.source).toBe('pipeline');
   });
+
+  it('computes weighted run-level throughput metrics from rows, events, and timings', () => {
+    const artifact = structuredClone(SYNTHETIC_ARTIFACTS[0]);
+    artifact.iterations = artifact.iterations.slice(0, 2);
+    artifact.iterations[0].counts.rowsFetched = 100;
+    artifact.iterations[0].counts.eventsFinalized = 10;
+    artifact.iterations[0].timingsMs.total = 1000;
+    artifact.iterations[0].timingsMs.kustoRead = { queryBuild: 100, executeToFirstRow: 100, streamRows: 100, mapRows: 100 };
+    artifact.iterations[1].counts.rowsFetched = 300;
+    artifact.iterations[1].counts.eventsFinalized = 30;
+    artifact.iterations[1].timingsMs.total = 3000;
+    artifact.iterations[1].timingsMs.kustoRead = { queryBuild: 200, executeToFirstRow: 200, streamRows: 200, mapRows: 200 };
+
+    const analysis = buildRunAnalysis(artifact, 'weighted.json');
+
+    expect(analysis.throughputMetrics.kustoReadThroughputRowsPerSec).toBeCloseTo(400 / 1.2);
+    expect(analysis.throughputMetrics.processingThroughputRowsPerSec).toBe(100);
+    expect(analysis.throughputMetrics.eventThroughputEventsPerSec).toBe(10);
+    expect(analysis.throughputMetrics.compressionRateRowsPerEvent).toBe(10);
+  });
 });
 
 describe('buildAverageSummaryRow', () => {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { parseBenchmarkArtifactText, parseBenchmarkFileText, BenchmarkLoadError } from './parse';
+import {
+  parseBenchmarkArtifactText,
+  parseBenchmarkFileText,
+  parseBenchmarkIterationsJsonlText,
+  parseBenchmarkRunManifestText,
+  parseLatestBenchmarkIterationJsonlText,
+  BenchmarkLoadError,
+} from './parse';
 import { SYNTHETIC_ARTIFACTS } from './sample';
 
 describe('parseBenchmarkArtifactText', () => {
@@ -83,13 +90,65 @@ describe('parseBenchmarkArtifactText', () => {
         poisoned: 0,
       },
       messages: [{ ordinal: 0, rowId: null, sessionId: null, enqueuedTimeUtc: '2026-01-15T16:50:00.000Z', status: 'pending' }],
-      events: [],
+      events: [{ atUtc: '2026-01-15T17:00:46.000Z', kind: 'duplicate', label: 'Duplicate source rows', messageCount: 2 }],
     };
     (source.iterations[0].pipeline!.messages[0] as { status: unknown }).status = 'unknown';
 
     expect(() => parseBenchmarkArtifactText(JSON.stringify(source), 'bad-pipeline.json')).toThrow(
       /bad-pipeline\.json: artifact\.iterations\[0\]\.pipeline\.messages\[0\]\.status/,
     );
+  });
+
+  it('accepts per-iteration jsonl snapshots', () => {
+    const first = SYNTHETIC_ARTIFACTS[0].iterations[0];
+    const second = { ...first, completedAtUtc: '2026-01-15T17:02:00.000Z', counts: { ...first.counts, rowsFetched: first.counts.rowsFetched + 1 } };
+
+    const iterations = parseBenchmarkIterationsJsonlText(`${JSON.stringify(first)}\n${JSON.stringify(second)}\n`, 'iteration.jsonl');
+
+    expect(iterations).toHaveLength(2);
+    expect(iterations.at(-1)?.counts.rowsFetched).toBe(second.counts.rowsFetched);
+  });
+
+  it('loads compact manifests from old large run files without parsing embedded iterations', () => {
+    const source = structuredClone(SYNTHETIC_ARTIFACTS[0]);
+    source.iterations = [SYNTHETIC_ARTIFACTS[0].iterations[0]];
+
+    const artifact = parseBenchmarkRunManifestText(JSON.stringify(source), 'manifest.json');
+
+    expect(artifact.run.runId).toBe(source.run.runId);
+    expect(artifact.summary.iterationCount).toBe(source.summary.iterationCount);
+    expect(artifact.iterations).toHaveLength(0);
+  });
+
+  it('loads only the latest jsonl snapshot for live folders', () => {
+    const first = SYNTHETIC_ARTIFACTS[0].iterations[0];
+    const second = {
+      ...first,
+      completedAtUtc: '2026-01-15T17:02:00.000Z',
+      counts: { ...first.counts, rowsFetched: first.counts.rowsFetched + 1 },
+      pipeline: {
+        snapshotAtUtc: '2026-01-15T17:02:00.000Z',
+        shardId: first.shardId,
+        windowStartUtc: first.windowStartUtc,
+        windowEndUtc: first.windowEndUtc,
+        currentTimeUtc: '2026-01-15T17:02:00.000Z',
+        watermarkUtc: null,
+        candidateWatermarkUtc: first.windowEndUtc,
+        checkpointAdvancedToUtc: null,
+        totalShardMessages: first.counts.rowsFetched + 1,
+        currentWindowMessages: first.counts.rowsFetched + 1,
+        backlogMessages: 0,
+        blockedMessages: 0,
+        statusCounts: { pending: 0, done: 1, skipped: 0, duplicateAcknowledged: 1, poisoned: 0 },
+        messages: [],
+        events: [{ atUtc: '2026-01-15T17:02:00.000Z', kind: 'duplicate' as const, label: 'Duplicate source rows', messageCount: 2 }],
+      },
+    };
+
+    const iteration = parseLatestBenchmarkIterationJsonlText(`${JSON.stringify(first)}\n${JSON.stringify(second)}\n`, 'iteration.jsonl');
+
+    expect(iteration?.counts.rowsFetched).toBe(second.counts.rowsFetched);
+    expect(iteration?.pipeline?.events[0].kind).toBe('duplicate');
   });
 
   it('accepts schemaVersion 1 benchmark summary artifacts', () => {

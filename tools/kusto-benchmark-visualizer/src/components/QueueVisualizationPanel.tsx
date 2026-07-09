@@ -21,6 +21,7 @@ const EVENT_LABELS = {
   flush: 'Flush',
   checkpoint: 'Checkpoint',
   blocked: 'Blocked',
+  duplicate: 'Duplicate',
 } as const;
 
 export function QueueVisualizationPanel({ snapshot }: QueueVisualizationPanelProps) {

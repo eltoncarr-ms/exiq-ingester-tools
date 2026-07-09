@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-The app accepts one or more JSON artifacts through the picker or drag/drop area. Use **Watch live file** in the header to poll a benchmark artifact while it is being refreshed.
+The app accepts one or more JSON artifacts or a benchmark run folder through the picker or drag/drop area. Use **Live Stream** in the header to poll a benchmark run folder while it is being refreshed.
 
 ## Build
 

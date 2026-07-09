@@ -1,4 +1,4 @@
-import type { BenchmarkArtifact, BenchmarkSummaryArtifact } from './types';
+import type { BenchmarkArtifact, BenchmarkIteration, BenchmarkSummaryArtifact, RunMetadata } from './types';
 
 export type ParsedBenchmarkFile =
   | { kind: 'run'; artifact: BenchmarkArtifact }
@@ -68,7 +68,7 @@ function requireEnum<T extends string>(value: unknown, path: string, allowed: re
 }
 
 const PIPELINE_MESSAGE_STATUSES = ['pending', 'done', 'skipped', 'duplicateAcknowledged', 'poisoned'] as const;
-const PIPELINE_EVENT_KINDS = ['read', 'rehydrate', 'process', 'flush', 'checkpoint', 'blocked'] as const;
+const PIPELINE_EVENT_KINDS = ['read', 'rehydrate', 'process', 'flush', 'checkpoint', 'blocked', 'duplicate'] as const;
 
 export function parseBenchmarkArtifact(value: unknown): BenchmarkArtifact {
   const root = requireRecord(value, 'artifact');
@@ -114,6 +114,146 @@ export function parseBenchmarkFile(value: unknown): ParsedBenchmarkFile {
 export function parseBenchmarkArtifactText(text: string, sourceName = 'benchmark artifact'): BenchmarkArtifact {
   try {
     return parseBenchmarkArtifact(JSON.parse(text));
+  } catch (error) {
+    if (error instanceof BenchmarkLoadError) {
+      throw new BenchmarkLoadError(`${sourceName}: ${error.message}`);
+    }
+
+    throw new BenchmarkLoadError(`${sourceName}: invalid JSON.`);
+  }
+}
+
+function findPropertyValue(text: string, propertyName: string): string | null {
+  const match = new RegExp(`"${propertyName}"\\s*:`).exec(text);
+  if (!match) return null;
+
+  let index = match.index + match[0].length;
+  while (index < text.length && /\s/.test(text[index])) index++;
+  const start = index;
+  const opener = text[index];
+  const closer = opener === '{' ? '}' : opener === '[' ? ']' : null;
+  if (!closer) {
+    while (index < text.length && text[index] !== ',' && text[index] !== '\n' && text[index] !== '\r' && text[index] !== '}') index++;
+    return text.slice(start, index).trim();
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (; index < text.length; index++) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = inString;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+    if (char === opener) depth++;
+    if (char === closer) {
+      depth--;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+
+  return null;
+}
+
+export function parseBenchmarkRunManifestText(text: string, sourceName = 'benchmark run manifest'): BenchmarkArtifact {
+  try {
+    const schemaVersion = Number(findPropertyValue(text, 'schemaVersion'));
+    const runText = findPropertyValue(text, 'run');
+    const summaryText = findPropertyValue(text, 'summary');
+    if (!Number.isFinite(schemaVersion) || !runText || !summaryText) {
+      return parseBenchmarkArtifact(JSON.parse(text));
+    }
+
+    return parseBenchmarkArtifact({
+      schemaVersion,
+      run: JSON.parse(runText),
+      iterations: [],
+      memorySamples: [],
+      summary: JSON.parse(summaryText),
+    });
+  } catch (error) {
+    if (error instanceof BenchmarkLoadError) {
+      throw new BenchmarkLoadError(`${sourceName}: ${error.message}`);
+    }
+
+    throw new BenchmarkLoadError(`${sourceName}: invalid JSON.`);
+  }
+}
+
+export function parseBenchmarkRunHeaderText(text: string, sourceName = 'benchmark run manifest'): { schemaVersion: 1; run: RunMetadata } {
+  try {
+    const schemaVersion = Number(findPropertyValue(text, 'schemaVersion'));
+    const runText = findPropertyValue(text, 'run');
+    if (schemaVersion !== 1 || !runText) {
+      throw new BenchmarkLoadError('Run manifest header must include schemaVersion 1 and run metadata.');
+    }
+
+    const run = JSON.parse(runText);
+    const record = requireRecord(run, 'artifact.run');
+    requireString(record.runId, 'artifact.run.runId');
+    requireString(record.label, 'artifact.run.label');
+    requireString(record.source, 'artifact.run.source');
+    requireString(record.startedAtUtc, 'artifact.run.startedAtUtc');
+    requireString(record.completedAtUtc, 'artifact.run.completedAtUtc');
+    requireString(record.clientId, 'artifact.run.clientId');
+    requireNumber(record.clientCount, 'artifact.run.clientCount');
+    requireString(record.partitionScope, 'artifact.run.partitionScope');
+    requireRecord(record.configuration, 'artifact.run.configuration');
+
+    return { schemaVersion: 1, run: run as RunMetadata };
+  } catch (error) {
+    if (error instanceof BenchmarkLoadError) {
+      throw new BenchmarkLoadError(`${sourceName}: ${error.message}`);
+    }
+
+    throw new BenchmarkLoadError(`${sourceName}: invalid JSON.`);
+  }
+}
+
+export function parseBenchmarkIterationsJsonlText(text: string, sourceName = 'benchmark iterations'): BenchmarkIteration[] {
+  const iterations: BenchmarkIteration[] = [];
+  const failures: string[] = [];
+  text.split(/\r?\n/).forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    try {
+      const value = JSON.parse(trimmed);
+      validateIteration(value, `line ${index + 1}`);
+      iterations.push(value as BenchmarkIteration);
+    } catch (error) {
+      failures.push(error instanceof BenchmarkLoadError ? error.message : `line ${index + 1}: invalid JSON.`);
+    }
+  });
+
+  if (failures.length > 0) {
+    throw new BenchmarkLoadError(`${sourceName}: ${failures.join(' ')}`);
+  }
+
+  return iterations;
+}
+
+export function parseLatestBenchmarkIterationJsonlText(text: string, sourceName = 'benchmark iteration'): BenchmarkIteration | null {
+  const line = [...text.split(/\r?\n/)].reverse().find((candidate) => candidate.trim().length > 0);
+  if (!line) return null;
+
+  try {
+    const value = JSON.parse(line);
+    validateIteration(value, 'line');
+    return value as BenchmarkIteration;
   } catch (error) {
     if (error instanceof BenchmarkLoadError) {
       throw new BenchmarkLoadError(`${sourceName}: ${error.message}`);
