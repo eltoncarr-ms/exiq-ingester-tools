@@ -3,6 +3,7 @@ export type TimingKey =
   | 'pollKusto'
   | 'messageStoreSetup'
   | 'rehydrateMessageState'
+  | 'duplicateSourceRows'
   | 'processMessagesToEvents'
   | 'flush'
   | 'advanceCheckpoint'
@@ -15,6 +16,7 @@ export interface TimingMetrics {
   pollKusto: number;
   messageStoreSetup: number;
   rehydrateMessageState: number;
+  duplicateSourceRows: number;
   processMessagesToEvents: number;
   flush: number;
   advanceCheckpoint: number;

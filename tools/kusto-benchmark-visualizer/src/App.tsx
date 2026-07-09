@@ -1,23 +1,37 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import {
   filterRunAnalysisByRange,
   makeLoadedRun,
   makeLoadedRunWithId,
   makeLoadedSummary,
+  makeLoadedSummaryWithId,
   selectPipelineSnapshotForShard,
   selectStableShardId,
   TIME_RANGES,
   upsertLoadedRun,
+  upsertLoadedSummary,
   type LoadedRun,
   type LoadedSummary,
   type TimeRangeKey,
 } from './benchmark/derive';
 import { formatDateTime, formatDuration, formatNumber } from './benchmark/format';
 import { BenchmarkLoadError } from './benchmark/parse';
-import { DropZone, readBenchmarkDataTransfer, readBenchmarkDirectoryHandle, readBenchmarkInputFiles, type BenchmarkDirectoryHandle, type ParsedArtifact } from './components/DropZone';
+import {
+  benchmarkFilesSignature,
+  DropZone,
+  enumerateBenchmarkDirectory,
+  readBenchmarkDataTransfer,
+  readBenchmarkInputFiles,
+  type BenchmarkDirectoryHandle,
+  type BenchmarkReadCache,
+  type ParsedArtifact,
+} from './components/DropZone';
 import { ProcessingWindowPanel } from './components/ProcessingWindowPanel';
 import { SummaryComparison } from './components/SummaryComparison';
 import { ThroughputTrendCharts } from './components/ThroughputTrendCharts';
+
+const POLL_INTERVAL_MS = 500;
+const POLL_ERROR_BACKOFF_MS = 2000;
 
 export function App() {
   const [runs, setRuns] = useState<LoadedRun[]>([]);
@@ -30,6 +44,7 @@ export function App() {
   const [watchError, setWatchError] = useState<string | null>(null);
   const [dragOverApp, setDragOverApp] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
+  const watchStateRef = useRef<Map<string, WatchRuntimeState>>(new Map());
   const analyses = useMemo(() => runs.map((run) => run.analysis), [runs]);
   const summaryRows = useMemo(() => summaries.map((summary) => summary.summaryRow), [summaries]);
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null;
@@ -71,6 +86,33 @@ export function App() {
     artifacts.forEach((artifact, index) => upsertParsedArtifact(artifact, ordinalBase + index));
   };
 
+  const ensureWatchState = (id: string): WatchRuntimeState => {
+    const existing = watchStateRef.current.get(id);
+    if (existing) return existing;
+
+    const created: WatchRuntimeState = { cache: new Map(), signature: null, hadError: false };
+    watchStateRef.current.set(id, created);
+    return created;
+  };
+
+  const upsertWatchArtifact = (artifact: ParsedArtifact) => {
+    if (artifact.kind === 'run') {
+      const stableId = `${artifact.watchKey ?? 'watch'}:run:${artifact.artifact.run.runId}`;
+      const loaded = makeLoadedRunWithId(artifact.artifact, artifact.sourceName, stableId);
+      setRuns((current) => upsertLoadedRun(current, loaded));
+      setSelectedRunId((current) => current ?? loaded.id);
+      return;
+    }
+
+    const stableId = `${artifact.watchKey ?? 'watch'}:summary:${artifact.artifact.label}`;
+    const loaded = makeLoadedSummaryWithId(artifact.artifact, artifact.sourceName, stableId);
+    setSummaries((current) => upsertLoadedSummary(current, loaded));
+  };
+
+  const upsertWatchArtifacts = (artifacts: ParsedArtifact[]) => {
+    artifacts.forEach(upsertWatchArtifact);
+  };
+
   const clearRuns = () => {
     setRuns([]);
     setSummaries([]);
@@ -79,6 +121,7 @@ export function App() {
     setWatchedFiles([]);
     setWatchError(null);
     setDropError(null);
+    watchStateRef.current.clear();
   };
 
   const handleAppDrop = async (event: DragEvent<HTMLDivElement>) => {
@@ -105,7 +148,11 @@ export function App() {
     try {
       const handle = await window.showDirectoryPicker();
       const watchKey = `live-dir:${handle.name}:${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
-      addArtifacts(withWatchKey(await readBenchmarkDirectoryHandle(handle), watchKey));
+      const cache: BenchmarkReadCache = new Map();
+      const files = await enumerateBenchmarkDirectory(handle);
+      const signature = benchmarkFilesSignature(files);
+      upsertWatchArtifacts(withWatchKey(await readBenchmarkInputFiles(files, cache), watchKey));
+      watchStateRef.current.set(watchKey, { cache, signature, hadError: false });
       setWatchedFiles((current) => upsertWatchedFile(current, watchKey, handle.name, handle));
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
@@ -118,22 +165,55 @@ export function App() {
   useEffect(() => {
     if (watchedFiles.length === 0) return;
 
+    const activeIds = new Set(watchedFiles.map((watched) => watched.id));
+    for (const key of [...watchStateRef.current.keys()]) {
+      if (!activeIds.has(key)) watchStateRef.current.delete(key);
+    }
+
     let disposed = false;
-    const refresh = async () => {
+    let timer: number | undefined;
+
+    const scheduleNext = (delayMs: number) => {
+      if (!disposed) {
+        timer = window.setTimeout(runRefresh, delayMs);
+      }
+    };
+
+    const runRefresh = async () => {
+      let backoff = false;
+
       for (const watched of watchedFiles) {
+        if (disposed) return;
+        const state = ensureWatchState(watched.id);
+
         try {
-          const artifacts = withWatchKey(await readBenchmarkDirectoryHandle(watched.handle), watched.id);
+          const files = await enumerateBenchmarkDirectory(watched.handle);
           if (disposed) return;
-          addArtifacts(artifacts);
-          setWatchedFiles((current) =>
-            current.map((candidate) =>
-              candidate.id === watched.id
-                ? { ...candidate, lastRefreshAtUtc: new Date().toISOString(), lastError: null }
-                : candidate,
-            ),
-          );
+          const signature = benchmarkFilesSignature(files);
+
+          if (signature !== state.signature) {
+            const artifacts = withWatchKey(await readBenchmarkInputFiles(files, state.cache), watched.id);
+            if (disposed) return;
+            state.signature = signature;
+            upsertWatchArtifacts(artifacts);
+            setWatchedFiles((current) =>
+              current.map((candidate) =>
+                candidate.id === watched.id
+                  ? { ...candidate, lastRefreshAtUtc: new Date().toISOString(), lastError: null }
+                  : candidate,
+              ),
+            );
+          } else if (state.hadError) {
+            setWatchedFiles((current) =>
+              current.map((candidate) => (candidate.id === watched.id ? { ...candidate, lastError: null } : candidate)),
+            );
+          }
+
+          state.hadError = false;
         } catch (caught) {
           if (disposed) return;
+          backoff = true;
+          state.hadError = true;
           const message =
             caught instanceof BenchmarkLoadError || caught instanceof Error
               ? caught.message
@@ -143,13 +223,15 @@ export function App() {
           );
         }
       }
+
+      scheduleNext(backoff ? POLL_ERROR_BACKOFF_MS : POLL_INTERVAL_MS);
     };
 
-    const intervalId = window.setInterval(refresh, 250);
-    void refresh();
+    void runRefresh();
+
     return () => {
       disposed = true;
-      window.clearInterval(intervalId);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [watchedFileSignature]);
 
@@ -291,6 +373,12 @@ interface WatchedFile {
   handle: BenchmarkDirectoryHandle;
   lastRefreshAtUtc: string | null;
   lastError: string | null;
+}
+
+interface WatchRuntimeState {
+  cache: BenchmarkReadCache;
+  signature: string | null;
+  hadError: boolean;
 }
 
 function upsertWatchedFile(files: WatchedFile[], id: string, sourceName: string, handle: BenchmarkDirectoryHandle): WatchedFile[] {

@@ -85,6 +85,14 @@ function buildDefinitions(analysis: RunAnalysis): TrendDefinition[] {
       points: buildTrendPoints(analysis, (metric) => metric.compressionRateRowsPerEvent),
       formatValue: formatCompression,
     },
+    {
+      title: 'Checkpoint velocity over time',
+      unit: 'src sec/wall sec',
+      color: '#fb7185',
+      includeZero: true,
+      points: buildTrendPoints(analysis, (metric) => metric.checkpointVelocitySourcePerWall),
+      formatValue: formatThroughput,
+    },
   ];
 }
 
@@ -94,7 +102,7 @@ export function ThroughputTrendCharts({ analysis }: ThroughputTrendChartsProps) 
   return (
     <Panel
       title="Throughput trends"
-      description="Per-iteration trend lines for the same four metrics shown in the run gauges."
+      description="Per-iteration trend lines for the same five metrics shown in the run gauges."
     >
       <div className="trend-grid">
         {definitions.map((definition) => (

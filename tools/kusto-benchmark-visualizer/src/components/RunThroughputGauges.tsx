@@ -104,6 +104,13 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
       color: '#a78bfa',
       rangeValues: iterationMetrics.map((candidate) => candidate.compressionRateRowsPerEvent),
     },
+    {
+      label: 'Checkpoint velocity',
+      value: displayed?.checkpointVelocitySourcePerWall ?? 0,
+      unit: 'src sec/wall sec',
+      color: '#fb7185',
+      rangeValues: iterationMetrics.map((candidate) => candidate.checkpointVelocitySourcePerWall),
+    },
   ];
 
   return (

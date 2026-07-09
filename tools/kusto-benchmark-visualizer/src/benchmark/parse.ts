@@ -344,6 +344,7 @@ function validateTimings(value: unknown, path: string): void {
     'pollKusto',
     'messageStoreSetup',
     'rehydrateMessageState',
+    'duplicateSourceRows',
     'processMessagesToEvents',
     'flush',
     'advanceCheckpoint',

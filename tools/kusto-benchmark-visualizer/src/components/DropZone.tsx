@@ -74,8 +74,11 @@ interface DropZoneProps {
 export interface BenchmarkInputFile {
   name: string;
   path: string;
+  size?: number;
+  lastModified?: number;
   text: () => Promise<string>;
   headText?: (bytes: number) => Promise<string>;
+  tailText?: (bytes: number) => Promise<string>;
 }
 
 function normalizePath(path: string): string {
@@ -100,8 +103,11 @@ function toInputFile(file: File, path = (file as File & { webkitRelativePath?: s
   return {
     name: file.name,
     path: normalizePath(path || file.name),
+    size: file.size,
+    lastModified: file.lastModified,
     text: () => file.text(),
     headText: (bytes) => file.slice(0, bytes).text(),
+    tailText: (bytes) => file.slice(Math.max(0, file.size - bytes)).text(),
   };
 }
 
@@ -111,6 +117,7 @@ function zeroTimings(): TimingMetrics {
     pollKusto: 0,
     messageStoreSetup: 0,
     rehydrateMessageState: 0,
+    duplicateSourceRows: 0,
     processMessagesToEvents: 0,
     flush: 0,
     advanceCheckpoint: 0,
@@ -145,6 +152,7 @@ function summarizeIterations(iterations: BenchmarkIteration[]) {
           pollKusto: averageTiming('pollKusto'),
           messageStoreSetup: averageTiming('messageStoreSetup'),
           rehydrateMessageState: averageTiming('rehydrateMessageState'),
+          duplicateSourceRows: averageTiming('duplicateSourceRows'),
           processMessagesToEvents: averageTiming('processMessagesToEvents'),
           flush: averageTiming('flush'),
           advanceCheckpoint: averageTiming('advanceCheckpoint'),
@@ -231,7 +239,50 @@ function latestIterations(iterations: BenchmarkIteration[]): BenchmarkIteration[
     left.startedAtUtc.localeCompare(right.startedAtUtc) || left.iterationId.localeCompare(right.iterationId));
 }
 
-export async function readBenchmarkInputFiles(files: BenchmarkInputFile[]): Promise<ParsedArtifact[]> {
+export interface BenchmarkReadCacheEntry {
+  size: number;
+  lastModified: number;
+  iteration: BenchmarkIteration | null;
+}
+
+export type BenchmarkReadCache = Map<string, BenchmarkReadCacheEntry>;
+
+const JSONL_TAIL_CHUNK_BYTES = 64 * 1024;
+
+async function readJsonlTail(file: BenchmarkInputFile): Promise<string> {
+  if (!file.tailText || typeof file.size !== 'number') {
+    return file.text();
+  }
+
+  let bytes = Math.min(file.size, JSONL_TAIL_CHUNK_BYTES);
+  while (true) {
+    const text = await file.tailText(bytes);
+    if (bytes >= file.size || text.replace(/[\r\n]+$/, '').includes('\n')) {
+      return text;
+    }
+
+    bytes = Math.min(file.size, bytes * 4);
+  }
+}
+
+async function resolveJsonlIteration(file: BenchmarkInputFile, cache?: BenchmarkReadCache): Promise<BenchmarkIteration | null> {
+  const canCache = cache !== undefined && typeof file.size === 'number' && typeof file.lastModified === 'number';
+  if (canCache) {
+    const cached = cache!.get(file.path);
+    if (cached && cached.size === file.size && cached.lastModified === file.lastModified) {
+      return cached.iteration;
+    }
+  }
+
+  const iteration = parseLatestBenchmarkIterationJsonlText(await readJsonlTail(file), file.path);
+  if (canCache) {
+    cache!.set(file.path, { size: file.size as number, lastModified: file.lastModified as number, iteration });
+  }
+
+  return iteration;
+}
+
+export async function readBenchmarkInputFiles(files: BenchmarkInputFile[], cache?: BenchmarkReadCache): Promise<ParsedArtifact[]> {
   const runs: Array<{ artifact: BenchmarkArtifact; sourceName: string; runDirectory: string }> = [];
   const summaries: ParsedArtifact[] = [];
   const iterationsByRunDirectory = new Map<string, BenchmarkIteration[]>();
@@ -254,7 +305,7 @@ export async function readBenchmarkInputFiles(files: BenchmarkInputFile[]): Prom
 
     try {
       if (lowerName.endsWith('.jsonl')) {
-        const iteration = parseLatestBenchmarkIterationJsonlText(await file.text(), file.path);
+        const iteration = await resolveJsonlIteration(file, cache);
         if (!iteration) continue;
         const runDirectory = runDirectoryFor(file.path);
         iterationsByRunDirectory.set(runDirectory, [...(iterationsByRunDirectory.get(runDirectory) ?? []), iteration]);
@@ -277,6 +328,15 @@ export async function readBenchmarkInputFiles(files: BenchmarkInputFile[]): Prom
 
     } catch (error) {
       failures.push(error instanceof BenchmarkLoadError ? error.message : `${file.path}: failed to load.`);
+    }
+  }
+
+  if (cache) {
+    const liveJsonlPaths = new Set(
+      files.filter((file) => file.name.toLowerCase().endsWith('.jsonl')).map((file) => file.path),
+    );
+    for (const key of [...cache.keys()]) {
+      if (!liveJsonlPaths.has(key)) cache.delete(key);
     }
   }
 
@@ -362,8 +422,19 @@ async function inputFilesFromDirectoryHandle(handle: BenchmarkDirectoryHandle, p
   return files;
 }
 
-export async function readBenchmarkDirectoryHandle(handle: BenchmarkDirectoryHandle): Promise<ParsedArtifact[]> {
-  return readBenchmarkInputFiles(await inputFilesFromDirectoryHandle(handle));
+export async function enumerateBenchmarkDirectory(handle: BenchmarkDirectoryHandle): Promise<BenchmarkInputFile[]> {
+  return inputFilesFromDirectoryHandle(handle);
+}
+
+export function benchmarkFilesSignature(files: BenchmarkInputFile[]): string {
+  return files
+    .map((file) => `${file.path}\u0000${file.size ?? ''}\u0000${file.lastModified ?? ''}`)
+    .sort()
+    .join('\u0001');
+}
+
+export async function readBenchmarkDirectoryHandle(handle: BenchmarkDirectoryHandle, cache?: BenchmarkReadCache): Promise<ParsedArtifact[]> {
+  return readBenchmarkInputFiles(await inputFilesFromDirectoryHandle(handle), cache);
 }
 
 export async function readBenchmarkFileHandles(handles: BenchmarkFileHandle[]): Promise<ParsedArtifact[]> {

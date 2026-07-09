@@ -239,7 +239,6 @@ button, input { font: inherit; }
 .processing-timeline__marker--current { stroke: #f8fafc; }
 .processing-timeline__marker--watermark { stroke: #2dd4bf; }
 .processing-timeline__marker--candidate { stroke: #f59e0b; stroke-dasharray: 5 5; }
-.processing-timeline__marker--boundary { stroke: #bae6fd; }
 .processing-timeline__marker--checkpoint { stroke: #f472b6; }
 .processing-timeline__checkpoint-dot { fill: #f472b6; stroke: #0b1020; stroke-width: 2; }
 .processing-timeline__label-chip { fill: rgba(11, 16, 32, 0.92); stroke: rgba(148, 163, 184, 0.28); }
@@ -332,7 +331,7 @@ button, input { font: inherit; }
 .event-marker--checkpoint { border-color: rgba(244, 114, 182, 0.34); }
 .event-marker--blocked { border-color: rgba(251, 113, 133, 0.4); }
 .event-marker--duplicate { border-color: rgba(167, 139, 250, 0.4); }
-.gauge-grid { display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.gauge-grid { display: grid; gap: 16px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .gauge-card {
   align-items: center;
   background: rgba(11, 16, 32, 0.55);

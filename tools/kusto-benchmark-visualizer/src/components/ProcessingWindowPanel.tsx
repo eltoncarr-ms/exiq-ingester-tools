@@ -162,8 +162,6 @@ function ProcessingTimeline({ snapshot }: { snapshot: PipelineWindowSnapshot }) 
              </text>
            </g>
           )}
-          <line className="processing-timeline__marker processing-timeline__marker--boundary" x1={track.x} x2={track.x} y1={track.y - 10} y2={track.y + track.height + 10} />
-          <line className="processing-timeline__marker processing-timeline__marker--boundary" x1={track.x + track.width} x2={track.x + track.width} y1={track.y - 10} y2={track.y + track.height + 10} />
           {checkpointX !== null && (
           <>
              <line className="processing-timeline__marker processing-timeline__marker--checkpoint" x1={checkpointX} x2={checkpointX} y1={track.y - 10} y2={track.y + track.height + 10} />

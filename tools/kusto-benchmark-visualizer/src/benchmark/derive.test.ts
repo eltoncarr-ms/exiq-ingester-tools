@@ -150,6 +150,26 @@ describe('buildRunAnalysis', () => {
     expect(analysis.throughputMetrics.processingThroughputRowsPerSec).toBe(100);
     expect(analysis.throughputMetrics.eventThroughputEventsPerSec).toBe(10);
     expect(analysis.throughputMetrics.compressionRateRowsPerEvent).toBe(10);
+    expect(analysis.throughputMetrics.checkpointAdvanceSeconds).toBeCloseTo(2);
+    expect(analysis.throughputMetrics.checkpointVelocitySourcePerWall).toBeCloseTo(0.5);
+    expect(analysis.iterationThroughputMetrics[0].checkpointVelocitySourcePerWall).toBeCloseTo(1);
+    expect(analysis.iterationThroughputMetrics[1].checkpointVelocitySourcePerWall).toBeCloseTo(1 / 3);
+  });
+
+  it('scores checkpoint velocity as source seconds committed per wall-clock second', () => {
+    const artifact = structuredClone(SYNTHETIC_ARTIFACTS[0]);
+    artifact.iterations = artifact.iterations.slice(0, 2);
+    artifact.iterations[0].checkpoint = { previous: 0, upper: 120_000, advancedTo: 120_000, blockedDurationMs: 0 };
+    artifact.iterations[0].timingsMs.total = 60_000;
+    artifact.iterations[1].checkpoint = { previous: 120_000, upper: 180_000, advancedTo: null, blockedDurationMs: 5_000 };
+    artifact.iterations[1].timingsMs.total = 5_000;
+
+    const analysis = buildRunAnalysis(artifact, 'velocity.json');
+
+    expect(analysis.iterationThroughputMetrics[0].checkpointVelocitySourcePerWall).toBeCloseTo(2);
+    expect(analysis.iterationThroughputMetrics[1].checkpointVelocitySourcePerWall).toBe(0);
+    expect(analysis.throughputMetrics.checkpointAdvanceSeconds).toBeCloseTo(120);
+    expect(analysis.throughputMetrics.checkpointVelocitySourcePerWall).toBeCloseTo(120 / 65);
   });
 });
 

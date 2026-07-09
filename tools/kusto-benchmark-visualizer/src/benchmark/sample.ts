@@ -12,6 +12,7 @@ function timingsFor(index: number, multiplier: number): TimingMetrics {
     pollKusto: 210 * multiplier + index * 12,
     messageStoreSetup: 34 + index,
     rehydrateMessageState: 48 + index * 4,
+    duplicateSourceRows: 12 + index * 2,
     processMessagesToEvents: 340 * multiplier + index * 18,
     flush: 150 * multiplier + (index % 3) * 24,
     advanceCheckpoint: 62 + index * 3,
@@ -23,6 +24,7 @@ function timingsFor(index: number, multiplier: number): TimingMetrics {
     timings.pollKusto +
     timings.messageStoreSetup +
     timings.rehydrateMessageState +
+    timings.duplicateSourceRows +
     timings.processMessagesToEvents +
     timings.flush +
     timings.advanceCheckpoint;
@@ -84,6 +86,7 @@ function summarize(iterations: BenchmarkIteration[], startedAtUtc: string, compl
     pollKusto: averageTiming('pollKusto'),
     messageStoreSetup: averageTiming('messageStoreSetup'),
     rehydrateMessageState: averageTiming('rehydrateMessageState'),
+    duplicateSourceRows: averageTiming('duplicateSourceRows'),
     processMessagesToEvents: averageTiming('processMessagesToEvents'),
     flush: averageTiming('flush'),
     advanceCheckpoint: averageTiming('advanceCheckpoint'),

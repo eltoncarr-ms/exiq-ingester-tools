@@ -16,6 +16,7 @@ export const STAGE_DEFINITIONS: ReadonlyArray<{ key: StageTimingKey; label: stri
   { key: 'pollKusto', label: 'Poll Kusto', color: '#22d3ee' },
   { key: 'messageStoreSetup', label: 'Store setup', color: '#38bdf8' },
   { key: 'rehydrateMessageState', label: 'Rehydrate state', color: '#60a5fa' },
+  { key: 'duplicateSourceRows', label: 'Dup source rows', color: '#2dd4bf' },
   { key: 'processMessagesToEvents', label: 'Process events', color: '#34d399' },
   { key: 'flush', label: 'Flush', color: '#f59e0b' },
   { key: 'advanceCheckpoint', label: 'Advance checkpoint', color: '#f472b6' },
@@ -47,6 +48,7 @@ const TIMING_KEYS: Array<keyof TimingMetrics> = [
   'pollKusto',
   'messageStoreSetup',
   'rehydrateMessageState',
+  'duplicateSourceRows',
   'processMessagesToEvents',
   'flush',
   'advanceCheckpoint',
@@ -129,6 +131,8 @@ export interface RunThroughputMetrics {
   processingThroughputRowsPerSec: number;
   eventThroughputEventsPerSec: number;
   compressionRateRowsPerEvent: number | null;
+  checkpointAdvanceSeconds: number;
+  checkpointVelocitySourcePerWall: number;
 }
 
 export interface IterationThroughputMetrics extends RunThroughputMetrics {
@@ -297,17 +301,27 @@ function kustoReadMs(iteration: BenchmarkIteration): number {
   );
 }
 
+function checkpointAdvanceSeconds(iteration: BenchmarkIteration): number {
+  const previous = coerceComparable(iteration.checkpoint?.previous);
+  const advancedTo = coerceComparable(iteration.checkpoint?.advancedTo);
+  if (previous === null || advancedTo === null) return 0;
+
+  return Math.max(0, (advancedTo - previous) / 1000);
+}
+
 function buildThroughputMetrics(iterations: BenchmarkIteration[]): RunThroughputMetrics {
   let rowsFetched = 0;
   let eventsFinalized = 0;
   let totalMs = 0;
   let totalKustoReadMs = 0;
+  let totalAdvanceSeconds = 0;
 
   for (const iteration of iterations) {
     rowsFetched += asNumber(iteration.counts?.rowsFetched);
     eventsFinalized += asNumber(iteration.counts?.eventsFinalized);
     totalMs += asNumber(iteration.timingsMs?.total);
     totalKustoReadMs += kustoReadMs(iteration);
+    totalAdvanceSeconds += checkpointAdvanceSeconds(iteration);
   }
 
   return {
@@ -315,6 +329,8 @@ function buildThroughputMetrics(iterations: BenchmarkIteration[]): RunThroughput
     processingThroughputRowsPerSec: totalMs > 0 ? rowsFetched / (totalMs / 1000) : 0,
     eventThroughputEventsPerSec: totalMs > 0 ? eventsFinalized / (totalMs / 1000) : 0,
     compressionRateRowsPerEvent: eventsFinalized > 0 ? rowsFetched / eventsFinalized : null,
+    checkpointAdvanceSeconds: totalAdvanceSeconds,
+    checkpointVelocitySourcePerWall: totalMs > 0 ? totalAdvanceSeconds / (totalMs / 1000) : 0,
   };
 }
 
@@ -324,6 +340,7 @@ function buildIterationThroughputMetrics(iterations: BenchmarkIteration[]): Iter
     const eventsFinalized = asNumber(iteration.counts?.eventsFinalized);
     const totalMs = asNumber(iteration.timingsMs?.total);
     const readMs = kustoReadMs(iteration);
+    const advanceSeconds = checkpointAdvanceSeconds(iteration);
 
     return {
       iterationId: iteration.iterationId,
@@ -331,6 +348,8 @@ function buildIterationThroughputMetrics(iterations: BenchmarkIteration[]): Iter
       processingThroughputRowsPerSec: totalMs > 0 ? rowsFetched / (totalMs / 1000) : 0,
       eventThroughputEventsPerSec: totalMs > 0 ? eventsFinalized / (totalMs / 1000) : 0,
       compressionRateRowsPerEvent: eventsFinalized > 0 ? rowsFetched / eventsFinalized : null,
+      checkpointAdvanceSeconds: advanceSeconds,
+      checkpointVelocitySourcePerWall: totalMs > 0 ? advanceSeconds / (totalMs / 1000) : 0,
     };
   });
 }
@@ -734,6 +753,29 @@ export function makeLoadedSummary(artifact: BenchmarkSummaryArtifact, fileName: 
       artifact.averages,
     ),
   };
+}
+
+export function makeLoadedSummaryWithId(artifact: BenchmarkSummaryArtifact, fileName: string, id: string): LoadedSummary {
+  const safeLabel = artifact.label || fileName.replace(/\.json$/i, '') || 'summary';
+
+  return {
+    id,
+    fileName,
+    artifact,
+    summaryRow: summaryToRow(
+      id,
+      `${safeLabel} (${artifact.runCount} run${artifact.runCount === 1 ? '' : 's'} average)`,
+      'summary',
+      artifact.averages,
+    ),
+  };
+}
+
+export function upsertLoadedSummary(summaries: LoadedSummary[], next: LoadedSummary): LoadedSummary[] {
+  const existingIndex = summaries.findIndex((summary) => summary.id === next.id);
+  if (existingIndex === -1) return [...summaries, next];
+
+  return summaries.map((summary, index) => (index === existingIndex ? next : summary));
 }
 
 export function buildAverageSummaryRow(runs: RunAnalysis[]): SummaryRow | null {
