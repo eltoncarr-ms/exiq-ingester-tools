@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { IterationThroughputMetrics, RunThroughputMetrics } from '../benchmark/derive';
 import { formatNumber } from '../benchmark/format';
 import { Panel } from './Panel';
@@ -12,6 +13,7 @@ interface GaugeMetric {
   value: number | null;
   unit: string;
   color: string;
+  description: string;
   rangeValues: Array<number | null>;
 }
 
@@ -48,6 +50,7 @@ function formatGaugeValue(value: number | null): string {
 }
 
 function Gauge({ metric, range, p95 }: { metric: GaugeMetric; range: { min: number; max: number }; p95: number | null }) {
+  const tooltipId = useId();
   const normalized = metric.value === null ? 0 : Math.max(0, Math.min(1, (metric.value - range.min) / (range.max - range.min)));
   const angle = -120 + normalized * 240;
   const endAngle = (Math.PI * (angle - 90)) / 180;
@@ -56,6 +59,19 @@ function Gauge({ metric, range, p95 }: { metric: GaugeMetric; range: { min: numb
 
   return (
     <div className="gauge-card">
+      <span className="gauge-card__info">
+        <button
+          type="button"
+          className="gauge-card__info-trigger"
+          aria-label={`About ${metric.label}`}
+          aria-describedby={tooltipId}
+        >
+          i
+        </button>
+        <span id={tooltipId} className="gauge-card__info-tooltip" role="tooltip">
+          {metric.description}
+        </span>
+      </span>
       <svg className="gauge" viewBox="0 0 160 116" role="img" aria-label={`${metric.label}: ${formatGaugeValue(metric.value)} ${metric.unit}`}>
         <path className="gauge__track" d="M 28 84 A 54 54 0 1 1 132 84" />
         <path className="gauge__value" d="M 28 84 A 54 54 0 1 1 132 84" pathLength={100} style={{ stroke: metric.color, strokeDasharray: `${normalized * 100} 100` }} />
@@ -81,6 +97,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
       value: displayed?.kustoReadThroughputRowsPerSec ?? 0,
       unit: 'rows/sec',
       color: '#38bdf8',
+      description: 'Raw source rows read per second during Kusto query + row mapping time.',
       rangeValues: iterationMetrics.map((candidate) => candidate.kustoReadThroughputRowsPerSec),
     },
     {
@@ -88,6 +105,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
       value: displayed?.processingThroughputRowsPerSec ?? 0,
       unit: 'rows/sec',
       color: '#34d399',
+      description: 'Raw source rows processed per second over total cycle/run wall time.',
       rangeValues: iterationMetrics.map((candidate) => candidate.processingThroughputRowsPerSec),
     },
     {
@@ -95,6 +113,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
       value: displayed?.eventThroughputEventsPerSec ?? 0,
       unit: 'events/sec',
       color: '#f59e0b',
+      description: 'Finalized output events/interactions per second over total cycle/run wall time.',
       rangeValues: iterationMetrics.map((candidate) => candidate.eventThroughputEventsPerSec),
     },
     {
@@ -102,6 +121,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
       value: displayed?.compressionRateRowsPerEvent ?? null,
       unit: 'rows/event',
       color: '#a78bfa',
+      description: 'Raw input rows represented by each finalized event/interaction.',
       rangeValues: iterationMetrics.map((candidate) => candidate.compressionRateRowsPerEvent),
     },
     {
@@ -109,6 +129,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
       value: displayed?.checkpointVelocitySourcePerWall ?? 0,
       unit: 'src sec/wall sec',
       color: '#fb7185',
+      description: 'Source-time seconds successfully advanced per wall-clock second; >1 catches up, <1 falls behind.',
       rangeValues: iterationMetrics.map((candidate) => candidate.checkpointVelocitySourcePerWall),
     },
   ];

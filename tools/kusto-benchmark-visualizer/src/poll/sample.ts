@@ -51,6 +51,12 @@ export function cycleEventLine(overrides: Record<string, unknown> = {}): string 
     writeMs: 1700,
     advanceMs: 90,
     writeInteractionsRu: 615.2,
+    // Weighted-throughput facts, preserved verbatim in `facts` (see
+    // PollCycleEvent.facts): 6000 input rows read from Kusto this cycle, and
+    // a 5-minute source window actually advanced by this (successful) cycle.
+    inputRows: 6000,
+    windowStartUtc: '2026-01-31T23:55:00.000Z',
+    windowEndUtc: '2026-02-01T00:00:00.000Z',
     ...overrides,
   };
 
@@ -76,9 +82,19 @@ export const SAMPLE_SKIPPED_CYCLE_LINE = cycleEventLine({
   writeMs: undefined,
   advanceMs: undefined,
   writeInteractionsRu: undefined,
+  inputRows: undefined,
+  windowStartUtc: undefined,
+  windowEndUtc: undefined,
 });
 
-/** A cycle that faulted mid-seal: partial facts, failingStage/error present, no write/advance. */
+/**
+ * A cycle that faulted mid-seal: partial facts, failingStage/error present,
+ * no write/advance. Deliberately keeps the default `inputRows`,
+ * `windowStartUtc`, and `windowEndUtc` facts (as if seal had already read
+ * them before the fault) so derive tests can assert the outcome gate alone
+ * — not fact absence — excludes a failed cycle from every weighted metric
+ * except checkpoint velocity's wall-time (`totalMs`) denominator.
+ */
 export const SAMPLE_FAILED_CYCLE_LINE = cycleEventLine({
   runId: 'run-failed-1',
   outcome: 'failed',

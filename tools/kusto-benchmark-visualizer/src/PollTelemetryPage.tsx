@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
-import { formatNumber } from './benchmark/format';
+import { formatDateTime, formatDurationDynamic, formatNumber } from './benchmark/format';
 import type { BenchmarkFileHandle } from './components/DropZone';
 import { Panel } from './components/Panel';
-import { PollCycleList } from './components/poll/PollCycleList';
 import { PollMetricDashboard } from './components/poll/PollMetricDashboard';
 import { PollThroughputTrends } from './components/poll/PollThroughputTrends';
 import { PollTimelineReplay } from './components/poll/PollTimelineReplay';
@@ -394,8 +393,25 @@ export function PollTelemetryPage() {
     if (stableSelectedRunId !== selectedRunId) setSelectedRunId(stableSelectedRunId);
   }, [stableSelectedRunId, selectedRunId]);
 
-  const selectedCycle = combinedCycles.find((cycle) => cycle.runId === stableSelectedRunId) ?? null;
   const recentWarnings = warnings.slice(-5);
+
+  // Earliest cycle start for the selected real source, comparable to the
+  // benchmark hero's "started at" metadata line — `null` only when the
+  // selected source has no cycles yet.
+  const selectedSourceStartedAtMs = useMemo(() => {
+    if (!selectedSourceAnalysis || selectedSourceAnalysis.cycles.length === 0) return null;
+    return Math.min(...selectedSourceAnalysis.cycles.map((cycle) => cycle.startedAtMs));
+  }, [selectedSourceAnalysis]);
+
+  // Earliest estimated start among unresolved (pending) cycles, when a real
+  // timestamp could be estimated (see `estimateUnresolvedStartMs` in
+  // poll/derive.ts) — its `0` fallback is treated as "no start available"
+  // rather than a real epoch.
+  const earliestPendingStartedAtMs = useMemo(() => {
+    if (analysis.unresolvedCycles.length === 0) return null;
+    const earliest = Math.min(...analysis.unresolvedCycles.map((cycle) => cycle.startedAtMs));
+    return earliest > 0 ? earliest : null;
+  }, [analysis.unresolvedCycles]);
 
   return (
     <div
@@ -441,7 +457,17 @@ export function PollTelemetryPage() {
             </button>
           )}
           {warnings.length > 0 && <span className="tag tag--warn">{formatNumber(warnings.length, 0)} warnings</span>}
-          {loaded && <span className="tag tag--muted">{formatNumber(events.length, 0)} events</span>}
+          {loaded && selectedSourceAnalysis && (
+            <>
+              <span className="tag tag--muted">{formatNumber(selectedSourceAnalysis.metrics.cycleCount, 0)} cycles</span>
+              {selectedSourceAnalysis.metrics.durationMs !== undefined && (
+                <span className="tag tag--ok">{formatDurationDynamic(selectedSourceAnalysis.metrics.durationMs)}</span>
+              )}
+            </>
+          )}
+          {loaded && isPendingSelected && (
+            <span className="tag tag--muted">{formatNumber(analysis.unresolvedCycles.length, 0)} cycles</span>
+          )}
           {loaded && (
             <button className="btn btn--ghost btn--sm" type="button" onClick={resetAll}>
               Clear
@@ -486,10 +512,15 @@ export function PollTelemetryPage() {
         <main className="app__main">
           <section className="run-hero">
             <div className="run-hero__content">
-              <p className="run-hero__eyebrow">{mode === 'live' ? (livePolling ? 'Polling live file' : 'Live file (stopped)') : 'Loaded file'}</p>
+              <p className="run-hero__eyebrow">Selected run</p>
               <h1>{sourceLabel ?? 'Poll telemetry'}</h1>
-              {(loadError || recentWarnings.length > 0) && (
+              {(mode === 'live' || loadError || recentWarnings.length > 0) && (
                 <div className="run-hero__refreshes">
+                  {mode === 'live' && (
+                    <span className={`run-hero__refresh ${livePolling ? '' : 'run-hero__refresh--error'}`}>
+                      {livePolling ? 'Polling live file' : 'Live file (stopped)'}
+                    </span>
+                  )}
                   {loadError && <span className="run-hero__refresh run-hero__refresh--error">{loadError}</span>}
                   {recentWarnings.map((warning, index) => (
                     <span key={`${warning.line}-${index}`} className="run-hero__refresh run-hero__refresh--error">
@@ -497,6 +528,19 @@ export function PollTelemetryPage() {
                     </span>
                   ))}
                 </div>
+              )}
+              {selectedSourceAnalysis ? (
+                <p>
+                  {selectedSourceAnalysis.source}
+                  {selectedSourceStartedAtMs !== null && ` · ${formatDateTime(new Date(selectedSourceStartedAtMs).toISOString())}`}
+                </p>
+              ) : isPendingSelected ? (
+                <p>
+                  {PENDING_SOURCE_LABEL}
+                  {earliestPendingStartedAtMs !== null && ` · ${formatDateTime(new Date(earliestPendingStartedAtMs).toISOString())}`}
+                </p>
+              ) : (
+                <p>Load a poll telemetry file to see source metrics and cycle replay.</p>
               )}
             </div>
           </section>
@@ -535,8 +579,7 @@ export function PollTelemetryPage() {
             </Panel>
           )}
 
-          <PollCycleList cycles={combinedCycles} selectedRunId={stableSelectedRunId} onSelect={setSelectedRunId} />
-          <PollTimelineReplay cycle={selectedCycle} />
+          <PollTimelineReplay cycles={combinedCycles} selectedRunId={stableSelectedRunId} onSelect={setSelectedRunId} />
         </main>
       )}
     </div>
