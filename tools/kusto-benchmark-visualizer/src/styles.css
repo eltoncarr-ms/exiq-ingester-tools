@@ -160,6 +160,8 @@ button, input { font: inherit; }
 .panel__body { padding: 16px; }
 
 .metric-strip { gap: 12px; margin-bottom: 16px; }
+.metric-strip--wrap { flex-wrap: wrap; }
+.metric-strip--wrap .metric-card { flex: 1 1 150px; }
 .metric-card { background: rgba(11, 16, 32, 0.62); border: 1px solid var(--line); border-radius: 14px; flex: 1; min-width: 150px; padding: 14px; }
 .metric-card--compact { min-width: 0; }
 .metric-card__label { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }

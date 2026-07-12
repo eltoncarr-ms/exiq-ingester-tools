@@ -63,6 +63,14 @@ function statsCell(
   return stats ? formatDuration(stats[key]) : '\u2014';
 }
 
+function cycleCount(value: number | undefined): string {
+  return value === undefined ? '\u2014' : formatNumber(value, 0);
+}
+
+function writeStageDescription(cycle: PollCycleAnalysis): string {
+  return `${stageMetricDescription('write')} Cosmos counts for this cycle: retries ${cycleCount(cycle.cosmosRetryCount)}; 429s ${cycleCount(cycle.cosmos429Count)}; attempted ${cycleCount(cycle.cosmosWriteAttempted)}; succeeded ${cycleCount(cycle.cosmosWriteSucceeded)}; failed ${cycleCount(cycle.cosmosWriteFailed)}; cancelled ${cycleCount(cycle.cosmosWriteCancelled)}.`;
+}
+
 function StageInfo({ label, description }: { label: string; description: string }) {
   const tooltipId = useId();
   return (
@@ -199,6 +207,12 @@ export function PollTimelineReplay({ cycles, selectedRunId, onSelect }: PollTime
             Throughput · {cycle.recordsPerSec !== null ? formatRate(cycle.recordsPerSec) : '—'}
           </span>
           <span className="tag tag--muted">Duration · {formatDuration(replayDurationMs(cycle))}</span>
+          <span className="tag tag--muted">Retries · {cycleCount(cycle.cosmosRetryCount)}</span>
+          <span className="tag tag--muted">429s · {cycleCount(cycle.cosmos429Count)}</span>
+          <span className="tag tag--muted">Attempted · {cycleCount(cycle.cosmosWriteAttempted)}</span>
+          <span className="tag tag--muted">Succeeded · {cycleCount(cycle.cosmosWriteSucceeded)}</span>
+          <span className="tag tag--muted">Failed · {cycleCount(cycle.cosmosWriteFailed)}</span>
+          <span className="tag tag--muted">Cancelled · {cycleCount(cycle.cosmosWriteCancelled)}</span>
           <span className={outcomeTagClass(cycle.outcome)} title={cycle.failingStage ?? cycle.error}>
             Outcome · {cycle.outcome}
           </span>
@@ -254,7 +268,7 @@ export function PollTimelineReplay({ cycles, selectedRunId, onSelect }: PollTime
           {laneFrames.map((laneFrame) => {
             const color = STAGE_COLORS[laneFrame.stage] ?? '#38bdf8';
             const displayName = stageDisplayName(laneFrame.stage);
-            const description = stageMetricDescription(laneFrame.stage);
+            const description = laneFrame.stage === 'write' ? writeStageDescription(cycle) : stageMetricDescription(laneFrame.stage);
             const barLeft = leftFor(laneFrame.startMs);
             const barWidth = widthFor(laneFrame.startMs, laneFrame.durMs);
             const barClass = ['poll-replay__bar', laneFrame.open ? 'poll-replay__bar--open' : '', !laneFrame.recorded ? 'poll-replay__bar--empty' : '']

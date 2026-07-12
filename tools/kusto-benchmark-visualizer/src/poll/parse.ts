@@ -131,6 +131,12 @@ function parseCycleEvent(root: Record<string, unknown>, path: string): PollCycle
   const writeMs = optionalNumber(root.writeMs, `${path}.writeMs`);
   const advanceMs = optionalNumber(root.advanceMs, `${path}.advanceMs`);
   const writeInteractionsRu = optionalNumber(root.writeInteractionsRu, `${path}.writeInteractionsRu`);
+  const cosmosRetryCount = optionalNumber(root.cosmosRetryCount, `${path}.cosmosRetryCount`);
+  const cosmos429Count = optionalNumber(root.cosmos429Count, `${path}.cosmos429Count`);
+  const cosmosWriteAttempted = optionalNumber(root.cosmosWriteAttempted, `${path}.cosmosWriteAttempted`);
+  const cosmosWriteSucceeded = optionalNumber(root.cosmosWriteSucceeded, `${path}.cosmosWriteSucceeded`);
+  const cosmosWriteFailed = optionalNumber(root.cosmosWriteFailed, `${path}.cosmosWriteFailed`);
+  const cosmosWriteCancelled = optionalNumber(root.cosmosWriteCancelled, `${path}.cosmosWriteCancelled`);
   const failingStage = optionalString(root.failingStage, `${path}.failingStage`);
   const error = optionalString(root.error, `${path}.error`);
 
@@ -153,6 +159,12 @@ function parseCycleEvent(root: Record<string, unknown>, path: string): PollCycle
     ...(writeMs !== undefined ? { writeMs } : {}),
     ...(advanceMs !== undefined ? { advanceMs } : {}),
     ...(writeInteractionsRu !== undefined ? { writeInteractionsRu } : {}),
+    ...(cosmosRetryCount !== undefined ? { cosmosRetryCount } : {}),
+    ...(cosmos429Count !== undefined ? { cosmos429Count } : {}),
+    ...(cosmosWriteAttempted !== undefined ? { cosmosWriteAttempted } : {}),
+    ...(cosmosWriteSucceeded !== undefined ? { cosmosWriteSucceeded } : {}),
+    ...(cosmosWriteFailed !== undefined ? { cosmosWriteFailed } : {}),
+    ...(cosmosWriteCancelled !== undefined ? { cosmosWriteCancelled } : {}),
     ...(failingStage !== undefined ? { failingStage } : {}),
     ...(error !== undefined ? { error } : {}),
     facts: root,

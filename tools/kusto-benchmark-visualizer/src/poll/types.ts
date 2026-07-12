@@ -63,6 +63,18 @@ export interface PollCycleEvent {
   advanceMs?: number;
   /** Request units spent writing interactions, when the sink reports RU. */
   writeInteractionsRu?: number;
+  /** Cosmos SDK retries observed during the write stage. */
+  cosmosRetryCount?: number;
+  /** Cosmos HTTP 429 responses observed during the write stage. */
+  cosmos429Count?: number;
+  /** Cosmos write operations attempted during the write stage. */
+  cosmosWriteAttempted?: number;
+  /** Cosmos write operations that succeeded during the write stage. */
+  cosmosWriteSucceeded?: number;
+  /** Cosmos write operations that failed during the write stage. */
+  cosmosWriteFailed?: number;
+  /** Cosmos write operations cancelled during the write stage. */
+  cosmosWriteCancelled?: number;
   /** Stage active when a failed cycle faulted; may be absent if disposed outside any stage. */
   failingStage?: string;
   /** Exception type name for a failed cycle. */

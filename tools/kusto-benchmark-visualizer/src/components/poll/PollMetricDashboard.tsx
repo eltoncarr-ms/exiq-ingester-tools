@@ -17,6 +17,10 @@ function MetricCard({ label, value, hint }: { label: string; value: string; hint
   );
 }
 
+function optionalCount(value: number | undefined): string {
+  return value === undefined ? '\u2014' : formatNumber(value, 0);
+}
+
 export function PollMetricDashboard({ source }: PollMetricDashboardProps) {
   const { metrics } = source;
   const { outcomeCounts } = metrics;
@@ -58,8 +62,21 @@ export function PollMetricDashboard({ source }: PollMetricDashboardProps) {
         )}
       </div>
 
+      <div className="metric-strip metric-strip--wrap" aria-label="Cosmos write totals">
+        <MetricCard label="Cosmos retries" value={optionalCount(metrics.totalCosmosRetryCount)} />
+        <MetricCard label="Cosmos 429s" value={optionalCount(metrics.totalCosmos429Count)} />
+        <MetricCard label="Writes attempted" value={optionalCount(metrics.totalCosmosWriteAttempted)} />
+        <MetricCard label="Writes succeeded" value={optionalCount(metrics.totalCosmosWriteSucceeded)} />
+        <MetricCard label="Writes failed" value={optionalCount(metrics.totalCosmosWriteFailed)} />
+        <MetricCard label="Writes cancelled" value={optionalCount(metrics.totalCosmosWriteCancelled)} />
+        <MetricCard
+          label="Affected cycles"
+          value={optionalCount(metrics.cosmosAffectedCycleCount)}
+          hint="retry, 429, failed, or cancelled write"
+        />
+      </div>
+
       <ThroughputGaugeGrid metrics={source.throughputMetrics} iterationMetrics={source.iterationThroughputMetrics} />
     </Panel>
   );
 }
-

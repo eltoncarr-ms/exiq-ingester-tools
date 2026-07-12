@@ -49,6 +49,57 @@ describe('buildPollAnalysis', () => {
     expect(portal.metrics.totalWriteInteractionsRu).toBeCloseTo(615.2);
   });
 
+  it('carries cycle Cosmos metrics and aggregates source totals with affected-cycle count', () => {
+    const analysis = analyzeLines([
+      cycleEventLine({
+        cosmosRetryCount: 3,
+        cosmos429Count: 2,
+      }),
+    ]);
+    const portal = findSource(analysis, 'portal-firehose');
+    const cycle = portal.cycles.find((entry) => entry.runId === 'run-success-1');
+
+    expect(cycle).toMatchObject({
+      cosmosRetryCount: 3,
+      cosmos429Count: 2,
+      cosmosWriteAttempted: 42,
+      cosmosWriteSucceeded: 42,
+      cosmosWriteFailed: 0,
+      cosmosWriteCancelled: 0,
+    });
+    expect(portal.metrics).toMatchObject({
+      totalCosmosRetryCount: 3,
+      totalCosmos429Count: 2,
+      totalCosmosWriteAttempted: 42,
+      totalCosmosWriteSucceeded: 42,
+      totalCosmosWriteFailed: 0,
+      totalCosmosWriteCancelled: 0,
+      cosmosAffectedCycleCount: 1,
+    });
+  });
+
+  it('keeps verified zero Cosmos totals distinct from absent metrics', () => {
+    const zeroAnalysis = analyzeLines([
+      cycleEventLine({
+        cosmosRetryCount: 0,
+        cosmos429Count: 0,
+        cosmosWriteAttempted: 0,
+        cosmosWriteSucceeded: 0,
+        cosmosWriteFailed: 0,
+        cosmosWriteCancelled: 0,
+      }),
+    ]);
+    const zeroMetrics = findSource(zeroAnalysis, 'portal-firehose').metrics;
+    expect(zeroMetrics.totalCosmosRetryCount).toBe(0);
+    expect(zeroMetrics.totalCosmosWriteAttempted).toBe(0);
+    expect(zeroMetrics.cosmosAffectedCycleCount).toBe(0);
+
+    const absentMetrics = findSource(analyzeLines([SAMPLE_SKIPPED_CYCLE_LINE]), 'portal-firehose').metrics;
+    expect(absentMetrics.totalCosmosRetryCount).toBeUndefined();
+    expect(absentMetrics.totalCosmosWriteAttempted).toBeUndefined();
+    expect(absentMetrics.cosmosAffectedCycleCount).toBeUndefined();
+  });
+
   it('omits every optional metric when no cycle for a source defines the underlying fact', () => {
     const analysis = analyzeLines([SAMPLE_SKIPPED_CYCLE_LINE]);
     const source = analysis.sources[0];

@@ -51,6 +51,10 @@ export function cycleEventLine(overrides: Record<string, unknown> = {}): string 
     writeMs: 1700,
     advanceMs: 90,
     writeInteractionsRu: 615.2,
+    cosmosWriteAttempted: 42,
+    cosmosWriteSucceeded: 42,
+    cosmosWriteFailed: 0,
+    cosmosWriteCancelled: 0,
     // Weighted-throughput facts, preserved verbatim in `facts` (see
     // PollCycleEvent.facts): 6000 input rows read from Kusto this cycle, and
     // a 5-minute source window actually advanced by this (successful) cycle.
@@ -82,6 +86,12 @@ export const SAMPLE_SKIPPED_CYCLE_LINE = cycleEventLine({
   writeMs: undefined,
   advanceMs: undefined,
   writeInteractionsRu: undefined,
+  cosmosRetryCount: undefined,
+  cosmos429Count: undefined,
+  cosmosWriteAttempted: undefined,
+  cosmosWriteSucceeded: undefined,
+  cosmosWriteFailed: undefined,
+  cosmosWriteCancelled: undefined,
   inputRows: undefined,
   windowStartUtc: undefined,
   windowEndUtc: undefined,
@@ -108,6 +118,12 @@ export const SAMPLE_FAILED_CYCLE_LINE = cycleEventLine({
   writeMs: undefined,
   advanceMs: undefined,
   writeInteractionsRu: undefined,
+  cosmosRetryCount: undefined,
+  cosmos429Count: undefined,
+  cosmosWriteAttempted: undefined,
+  cosmosWriteSucceeded: undefined,
+  cosmosWriteFailed: undefined,
+  cosmosWriteCancelled: undefined,
   failingStage: 'seal',
   error: 'KustoServiceException',
 });
@@ -119,6 +135,12 @@ export const SAMPLE_OTHER_SOURCE_CYCLE_LINE = cycleEventLine({
   users: 7,
   cursorLagSec: 4.2,
   writeInteractionsRu: 12.5,
+  cosmosRetryCount: 0,
+  cosmos429Count: 0,
+  cosmosWriteAttempted: 7,
+  cosmosWriteSucceeded: 7,
+  cosmosWriteFailed: 0,
+  cosmosWriteCancelled: 0,
 });
 
 /**

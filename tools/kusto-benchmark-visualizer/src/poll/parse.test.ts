@@ -43,7 +43,13 @@ describe('parsePollLine', () => {
   });
 
   it('parses a successful cycle event and keeps optional producer facts', () => {
-    const result = parsePollLine(cycleEventLine(), 1);
+    const result = parsePollLine(
+      cycleEventLine({
+        cosmosRetryCount: 3,
+        cosmos429Count: 2,
+      }),
+      1,
+    );
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -55,6 +61,12 @@ describe('parsePollLine', () => {
     expect(cycle.writeMs).toBe(1700);
     expect(cycle.advanceMs).toBe(90);
     expect(cycle.writeInteractionsRu).toBeCloseTo(615.2);
+    expect(cycle.cosmosRetryCount).toBe(3);
+    expect(cycle.cosmos429Count).toBe(2);
+    expect(cycle.cosmosWriteAttempted).toBe(42);
+    expect(cycle.cosmosWriteSucceeded).toBe(42);
+    expect(cycle.cosmosWriteFailed).toBe(0);
+    expect(cycle.cosmosWriteCancelled).toBe(0);
     expect(cycle.timeline).toHaveLength(4);
     expect(cycle.facts.selectivity).toBeUndefined();
     expect(cycle.facts.source).toBe('portal-firehose');
@@ -71,7 +83,33 @@ describe('parsePollLine', () => {
     expect(cycle.users).toBeUndefined();
     expect(cycle.kustoMs).toBeUndefined();
     expect(cycle.writeMs).toBeUndefined();
+    expect(cycle.cosmosRetryCount).toBeUndefined();
+    expect(cycle.cosmosWriteAttempted).toBeUndefined();
     expect(cycle.failingStage).toBeUndefined();
+  });
+
+  it('preserves verified zero Cosmos cycle metrics instead of treating them as absent', () => {
+    const result = parsePollLine(
+      cycleEventLine({
+        cosmosRetryCount: 0,
+        cosmos429Count: 0,
+        cosmosWriteAttempted: 0,
+        cosmosWriteSucceeded: 0,
+        cosmosWriteFailed: 0,
+        cosmosWriteCancelled: 0,
+      }),
+      1,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const cycle = result.event as PollCycleEvent;
+    expect(cycle.cosmosRetryCount).toBe(0);
+    expect(cycle.cosmos429Count).toBe(0);
+    expect(cycle.cosmosWriteAttempted).toBe(0);
+    expect(cycle.cosmosWriteSucceeded).toBe(0);
+    expect(cycle.cosmosWriteFailed).toBe(0);
+    expect(cycle.cosmosWriteCancelled).toBe(0);
   });
 
   it('parses a partial failed cycle with failingStage and error but no write/advance facts', () => {

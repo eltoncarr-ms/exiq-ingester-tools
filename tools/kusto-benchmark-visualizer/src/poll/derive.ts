@@ -39,6 +39,12 @@ export interface PollCycleAnalysis {
   kustoMs?: number;
   /** Reading and mapping Kusto rows within the seal stage, when reported by the cycle rollup. */
   mapMs?: number;
+  cosmosRetryCount?: number;
+  cosmos429Count?: number;
+  cosmosWriteAttempted?: number;
+  cosmosWriteSucceeded?: number;
+  cosmosWriteFailed?: number;
+  cosmosWriteCancelled?: number;
   stages: PollStageTimelineEntry[];
   error?: string;
   failingStage?: string;
@@ -74,6 +80,14 @@ export interface PollSourceMetrics {
   avgCycleMs?: number;
   latestCursorLagSec?: number;
   totalWriteInteractionsRu?: number;
+  totalCosmosRetryCount?: number;
+  totalCosmos429Count?: number;
+  totalCosmosWriteAttempted?: number;
+  totalCosmosWriteSucceeded?: number;
+  totalCosmosWriteFailed?: number;
+  totalCosmosWriteCancelled?: number;
+  /** Cycles reporting Cosmos metrics with at least one retry, 429, failed write, or cancelled write. */
+  cosmosAffectedCycleCount?: number;
   /** Full-run elapsed wall-clock time for this source: latest cycle completion minus earliest cycle start. `undefined` only when no cycle has a parsable timestamp. */
   durationMs?: number;
 }
@@ -262,6 +276,12 @@ function buildResolvedCycleAnalysis(cycle: PollCycleEvent): PollCycleAnalysis {
     recordsPerSec: cycle.recordsPerSec,
     ...(cycle.kustoMs !== undefined ? { kustoMs: cycle.kustoMs } : {}),
     ...(cycle.mapMs !== undefined ? { mapMs: cycle.mapMs } : {}),
+    ...(cycle.cosmosRetryCount !== undefined ? { cosmosRetryCount: cycle.cosmosRetryCount } : {}),
+    ...(cycle.cosmos429Count !== undefined ? { cosmos429Count: cycle.cosmos429Count } : {}),
+    ...(cycle.cosmosWriteAttempted !== undefined ? { cosmosWriteAttempted: cycle.cosmosWriteAttempted } : {}),
+    ...(cycle.cosmosWriteSucceeded !== undefined ? { cosmosWriteSucceeded: cycle.cosmosWriteSucceeded } : {}),
+    ...(cycle.cosmosWriteFailed !== undefined ? { cosmosWriteFailed: cycle.cosmosWriteFailed } : {}),
+    ...(cycle.cosmosWriteCancelled !== undefined ? { cosmosWriteCancelled: cycle.cosmosWriteCancelled } : {}),
     stages: cycle.timeline.map((entry) => ({ stage: entry.stage, startMs: entry.startMs, durMs: entry.durMs, completed: true })),
     ...(cycle.error !== undefined ? { error: cycle.error } : {}),
     ...(cycle.failingStage !== undefined ? { failingStage: cycle.failingStage } : {}),
@@ -293,6 +313,16 @@ function sourceDurationMs(cycles: PollCycleEvent[]): number | undefined {
 
 function buildSourceMetrics(cycles: PollCycleEvent[]): PollSourceMetrics {
   const successCycles = cycles.filter((cycle) => cycle.outcome === 'success');
+  const cyclesWithCosmosMetrics = cycles.filter((cycle) =>
+    [
+      cycle.cosmosRetryCount,
+      cycle.cosmos429Count,
+      cycle.cosmosWriteAttempted,
+      cycle.cosmosWriteSucceeded,
+      cycle.cosmosWriteFailed,
+      cycle.cosmosWriteCancelled,
+    ].some((value) => value !== undefined),
+  );
 
   return {
     cycleCount: cycles.length,
@@ -309,6 +339,23 @@ function buildSourceMetrics(cycles: PollCycleEvent[]): PollSourceMetrics {
     ...withDefined('avgCycleMs', average(cycles.map((cycle) => cycle.totalMs))),
     ...withDefined('latestCursorLagSec', latestDefinedBy(cycles, (cycle) => cycle.cursorLagSec)),
     ...withDefined('totalWriteInteractionsRu', sumDefined(cycles.map((cycle) => cycle.writeInteractionsRu))),
+    ...withDefined('totalCosmosRetryCount', sumDefined(cycles.map((cycle) => cycle.cosmosRetryCount))),
+    ...withDefined('totalCosmos429Count', sumDefined(cycles.map((cycle) => cycle.cosmos429Count))),
+    ...withDefined('totalCosmosWriteAttempted', sumDefined(cycles.map((cycle) => cycle.cosmosWriteAttempted))),
+    ...withDefined('totalCosmosWriteSucceeded', sumDefined(cycles.map((cycle) => cycle.cosmosWriteSucceeded))),
+    ...withDefined('totalCosmosWriteFailed', sumDefined(cycles.map((cycle) => cycle.cosmosWriteFailed))),
+    ...withDefined('totalCosmosWriteCancelled', sumDefined(cycles.map((cycle) => cycle.cosmosWriteCancelled))),
+    ...(cyclesWithCosmosMetrics.length > 0
+      ? {
+          cosmosAffectedCycleCount: cyclesWithCosmosMetrics.filter(
+            (cycle) =>
+              (cycle.cosmosRetryCount ?? 0) > 0 ||
+              (cycle.cosmos429Count ?? 0) > 0 ||
+              (cycle.cosmosWriteFailed ?? 0) > 0 ||
+              (cycle.cosmosWriteCancelled ?? 0) > 0,
+          ).length,
+        }
+      : {}),
     ...withDefined('durationMs', sourceDurationMs(cycles)),
   };
 }
