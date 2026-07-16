@@ -3,3 +3,4 @@
 **/.vs/
 **/TestResults/
 binaries/
+**/appsettings.local.json
