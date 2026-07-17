@@ -5,6 +5,7 @@ Tools-only repository for ExperienceIQ data ingester operational utilities.
 ## Contents
 
 - `tools/ExperienceIq.EventHubPeek`
+- `tools/ExperienceIq.CosmosCleanup`
 - `tools/ExperienceIq.KustoToEventHub`
 - `tools/ExperienceIq.PartitionBatchRunner`
 - `build-tools.cmd` (publishes all tools into one flat output folder)
@@ -34,3 +35,17 @@ Output is written to:
 - `binaries/`
 
 The script publishes every `*.csproj` under `tools/` to `binaries/` and then runs `merge-appsettings.ps1` to generate a single merged `binaries/appsettings.json`.
+
+## Clear cursor-poller Cosmos data
+
+The cleanup defaults target `exiqsqldb/exiq`, containers `interactions-v1` and
+`snapshots-v1`. Run:
+
+```powershell
+dotnet run --project tools\ExperienceIq.CosmosCleanup
+```
+
+Override defaults with an untracked `appsettings.local.json`, environment
+variables, or command-line configuration. See the
+[Cosmos cleanup guide](tools/ExperienceIq.CosmosCleanup/README.md) for required
+account capability setup and detailed usage.
