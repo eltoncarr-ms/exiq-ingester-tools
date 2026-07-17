@@ -1,0 +1,7 @@
+services:
+  visualizer:
+    build:
+      context: .
+    image: kusto-benchmark-visualizer:local
+    ports:
+      - "8080:8080"
