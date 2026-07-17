@@ -1,9 +1,10 @@
 using System.Collections.Concurrent;
-using System.Text.Json;
 using Azure.Identity;
 using ExperienceIq.CosmosCleanup;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 return await RunAsync(args);
 
@@ -39,6 +40,9 @@ static async Task<int> RunAsync(string[] args)
         Console.WriteLine($"Database         : {options.DatabaseName}");
         Console.WriteLine($"Containers       : {string.Join(", ", options.Containers.Select(c => c.Name))}");
         Console.WriteLine($"Delete concurrency: {options.PartitionDeleteConcurrency}");
+        Console.WriteLine(
+            $"Delete retries    : {options.PartitionDeleteRetryAttempts} " +
+            $"every {options.PartitionDeleteRetryDelaySeconds}s");
         Console.WriteLine($"Timestamp (UTC)  : {DateTimeOffset.UtcNow:O}");
         Console.WriteLine("================================================");
 
@@ -72,10 +76,49 @@ static async Task<int> RunAsync(string[] args)
             }
 
             Console.WriteLine(
+                $"{containerOptions.Name}: validating server-side partition purge support.");
+
+            var purgeLimitNoticeWritten = 0;
+            Action reportPurgeLimit = () =>
+            {
+                if (Interlocked.Exchange(ref purgeLimitNoticeWritten, 1) == 0)
+                {
+                    Console.WriteLine(
+                        $"{containerOptions.Name}: Cosmos active purge limit reached; " +
+                        $"retrying every {options.PartitionDeleteRetryDelaySeconds}s.");
+                }
+            };
+
+            var firstFailure = await StartPartitionPurgeWithRetryAsync(
+                container,
+                partitions[0],
+                options.PartitionDeleteRetryAttempts,
+                options.PartitionDeleteRetryDelaySeconds,
+                reportPurgeLimit,
+                cancellation.Token);
+
+            if (firstFailure is not null)
+            {
+                if (firstFailure.Contains(
+                    "Partition key delete feature is disabled",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"{containerOptions.Name}: server-side partition deletion is disabled for " +
+                        "this Cosmos DB account. Contact Azure Support to enable the " +
+                        "DeleteAllItemsByPartitionKey capability: https://azure.microsoft.com/support");
+                }
+
+                throw new InvalidOperationException(
+                    $"{containerOptions.Name}: partition purge validation failed:{Environment.NewLine}" +
+                    firstFailure);
+            }
+
+            Console.WriteLine(
                 $"{containerOptions.Name}: starting {partitions.Count} server-side partition purges.");
 
             var failures = new ConcurrentBag<string>();
-            var started = 0;
+            var started = 1;
             var parallelOptions = new ParallelOptions
             {
                 MaxDegreeOfParallelism = options.PartitionDeleteConcurrency,
@@ -83,23 +126,22 @@ static async Task<int> RunAsync(string[] args)
             };
 
             await Parallel.ForEachAsync(
-                partitions,
+                partitions.Skip(1),
                 parallelOptions,
                 async (partitionKey, cancellationToken) =>
                 {
                     try
                     {
-                        using var response =
-                            await container.DeleteAllItemsByPartitionKeyStreamAsync(
-                                partitionKey,
-                                cancellationToken: cancellationToken);
-
-                        if (!response.IsSuccessStatusCode)
+                        var failure = await StartPartitionPurgeWithRetryAsync(
+                            container,
+                            partitionKey,
+                            options.PartitionDeleteRetryAttempts,
+                            options.PartitionDeleteRetryDelaySeconds,
+                            reportPurgeLimit,
+                            cancellationToken);
+                        if (failure is not null)
                         {
-                            using var reader = new StreamReader(response.Content);
-                            var detail = await reader.ReadToEndAsync(cancellationToken);
-                            failures.Add(
-                                $"{partitionKey}: HTTP {(int)response.StatusCode} {detail}");
+                            failures.Add(failure);
                             return;
                         }
 
@@ -112,14 +154,15 @@ static async Task<int> RunAsync(string[] args)
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        failures.Add($"{partitionKey}: {exception.Message}");
+                        failures.Add($"{partitionKey}: {exception}");
                     }
                 });
 
             if (!failures.IsEmpty)
             {
                 throw new InvalidOperationException(
-                    $"{containerOptions.Name}: partition purge failures:{Environment.NewLine}" +
+                    $"{containerOptions.Name}: {failures.Count} partition purge failures. " +
+                    $"First {Math.Min(failures.Count, 20)}:{Environment.NewLine}" +
                     string.Join(Environment.NewLine, failures.Take(20)));
             }
 
@@ -142,7 +185,7 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (Exception exception)
     {
-        Console.Error.WriteLine($"Cosmos cleanup failed: {exception.Message}");
+        Console.Error.WriteLine($"Cosmos cleanup failed:{Environment.NewLine}{exception}");
         return 2;
     }
 }
@@ -157,7 +200,7 @@ static async Task<IReadOnlyList<PartitionKey>> ReadDistinctPartitionKeysAsync(
         options.PartitionKeyPaths.Select(path => $"c.{PartitionKeyPath.Normalize(path)}"));
 
     var query = new QueryDefinition($"SELECT DISTINCT {projection} FROM c");
-    using var iterator = container.GetItemQueryIterator<JsonElement>(
+    using var iterator = container.GetItemQueryIterator<JObject>(
         query,
         requestOptions: new QueryRequestOptions { MaxItemCount = 1000 });
 
@@ -175,14 +218,15 @@ static async Task<IReadOnlyList<PartitionKey>> ReadDistinctPartitionKeysAsync(
             foreach (var path in options.PartitionKeyPaths)
             {
                 var property = PartitionKeyPath.Normalize(path);
-                if (!row.TryGetProperty(property, out var value))
+                var value = row[property];
+                if (value is null)
                 {
                     throw new InvalidOperationException(
                         $"{options.Name}: query result is missing partition-key property '{property}'.");
                 }
 
                 AddPartitionKeyValue(builder, value);
-                keyParts.Add(value.GetRawText());
+                keyParts.Add(value.ToString(Formatting.None));
             }
 
             if (uniqueKeys.Add(string.Join("|", keyParts)))
@@ -195,6 +239,75 @@ static async Task<IReadOnlyList<PartitionKey>> ReadDistinctPartitionKeysAsync(
     return partitions;
 }
 
+static async Task<string?> StartPartitionPurgeWithRetryAsync(
+    Container container,
+    PartitionKey partitionKey,
+    int retryAttempts,
+    int retryDelaySeconds,
+    Action reportPurgeLimit,
+    CancellationToken cancellationToken)
+{
+    for (var attempt = 1; attempt <= retryAttempts; attempt++)
+    {
+        var result = await TryStartPartitionPurgeAsync(
+            container,
+            partitionKey,
+            cancellationToken);
+
+        if (result.Failure is null)
+        {
+            return null;
+        }
+
+        if (!result.ActivePurgeLimitReached || attempt == retryAttempts)
+        {
+            return attempt == retryAttempts && result.ActivePurgeLimitReached
+                ? $"{result.Failure} Retry limit reached after {retryAttempts} attempts."
+                : result.Failure;
+        }
+
+        reportPurgeLimit();
+        await Task.Delay(TimeSpan.FromSeconds(retryDelaySeconds), cancellationToken);
+    }
+
+    throw new InvalidOperationException("Partition purge retry loop completed unexpectedly.");
+}
+
+static async Task<(string? Failure, bool ActivePurgeLimitReached)> TryStartPartitionPurgeAsync(
+    Container container,
+    PartitionKey partitionKey,
+    CancellationToken cancellationToken)
+{
+    using var response = await container.DeleteAllItemsByPartitionKeyStreamAsync(
+        partitionKey,
+        cancellationToken: cancellationToken);
+
+    if (response.IsSuccessStatusCode)
+    {
+        return (null, false);
+    }
+
+    var detail = response.ErrorMessage;
+    if (string.IsNullOrWhiteSpace(detail) && response.Content is not null)
+    {
+        using var reader = new StreamReader(response.Content);
+        detail = await reader.ReadToEndAsync(cancellationToken);
+    }
+
+    if (string.IsNullOrWhiteSpace(detail))
+    {
+        detail = response.Diagnostics.ToString();
+    }
+
+    var failure = $"{partitionKey}: HTTP {(int)response.StatusCode} {response.StatusCode}; " +
+        $"ActivityId={response.Headers.ActivityId}; {detail}";
+    var activePurgeLimitReached = detail.Contains(
+        "Reached maximum limit for number of Partition Key deletes",
+        StringComparison.OrdinalIgnoreCase);
+
+    return (failure, activePurgeLimitReached);
+}
+
 static async Task VerifyEmptyAsync(
     Container container,
     int verificationAttempts,
@@ -203,7 +316,7 @@ static async Task VerifyEmptyAsync(
 {
     for (var attempt = 1; attempt <= verificationAttempts; attempt++)
     {
-        using var iterator = container.GetItemQueryIterator<JsonElement>(
+        using var iterator = container.GetItemQueryIterator<JToken>(
             "SELECT TOP 1 VALUE c.id FROM c",
             requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
 
@@ -225,25 +338,25 @@ static async Task VerifyEmptyAsync(
         $"Verification failed: container '{container.Id}' still returns documents.");
 }
 
-static void AddPartitionKeyValue(PartitionKeyBuilder builder, JsonElement value)
+static void AddPartitionKeyValue(PartitionKeyBuilder builder, JToken value)
 {
-    switch (value.ValueKind)
+    switch (value.Type)
     {
-        case JsonValueKind.String:
-            builder.Add(value.GetString()!);
+        case JTokenType.String:
+            builder.Add(value.Value<string>()!);
             break;
-        case JsonValueKind.Number:
-            builder.Add(value.GetDouble());
+        case JTokenType.Integer:
+        case JTokenType.Float:
+            builder.Add(value.Value<double>());
             break;
-        case JsonValueKind.True:
-        case JsonValueKind.False:
-            builder.Add(value.GetBoolean());
+        case JTokenType.Boolean:
+            builder.Add(value.Value<bool>());
             break;
-        case JsonValueKind.Null:
+        case JTokenType.Null:
             builder.AddNullValue();
             break;
         default:
             throw new InvalidOperationException(
-                $"Unsupported partition-key value: {value.GetRawText()}");
+                $"Unsupported partition-key value: {value.ToString(Formatting.None)}");
     }
 }

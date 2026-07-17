@@ -10,7 +10,11 @@ internal sealed class CosmosCleanupOptions
 
     public List<ContainerCleanupOptions> Containers { get; init; } = [];
 
-    public int PartitionDeleteConcurrency { get; init; } = 32;
+    public int PartitionDeleteConcurrency { get; init; } = 4;
+
+    public int PartitionDeleteRetryAttempts { get; init; } = 120;
+
+    public int PartitionDeleteRetryDelaySeconds { get; init; } = 5;
 
     public int VerificationAttempts { get; init; } = 10;
 
@@ -36,11 +40,13 @@ internal sealed class CosmosCleanupOptions
         }
 
         if (PartitionDeleteConcurrency <= 0 ||
+            PartitionDeleteRetryAttempts <= 0 ||
+            PartitionDeleteRetryDelaySeconds <= 0 ||
             VerificationAttempts <= 0 ||
             VerificationDelaySeconds <= 0)
         {
             throw new InvalidOperationException(
-                "Cleanup concurrency and verification values must be greater than zero.");
+                "Cleanup concurrency, retry, and verification values must be greater than zero.");
         }
 
         foreach (var container in Containers)

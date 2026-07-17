@@ -46,4 +46,6 @@ dotnet run --project tools\ExperienceIq.CosmosCleanup
 ```
 
 Override defaults with an untracked `appsettings.local.json`, environment
-variables, or command-line configuration.
+variables, or command-line configuration. See the
+[Cosmos cleanup guide](tools/ExperienceIq.CosmosCleanup/README.md) for required
+account capability setup and detailed usage.
