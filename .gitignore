@@ -4,3 +4,4 @@
 **/TestResults/
 binaries/
 **/appsettings.local.json
+.npm-cache

@@ -1,11 +1,24 @@
 import { useId } from 'react';
-import type { IterationThroughputMetrics, RunThroughputMetrics } from '../benchmark/derive';
 import { formatNumber } from '../benchmark/format';
 import { Panel } from './Panel';
 
+export interface ThroughputGaugeMetrics {
+  kustoReadThroughputRowsPerSec: number | null;
+  processingThroughputRowsPerSec: number | null;
+  eventThroughputEventsPerSec: number | null;
+  compressionRateRowsPerEvent: number | null;
+  checkpointAdvanceSeconds: number;
+  checkpointVelocitySourcePerWall: number | null;
+}
+
+export interface ThroughputGaugeIterationMetrics extends ThroughputGaugeMetrics {
+  iterationId: string;
+}
+
 interface RunThroughputGaugesProps {
-  metrics: RunThroughputMetrics | null;
-  iterationMetrics: IterationThroughputMetrics[];
+  metrics: ThroughputGaugeMetrics | null;
+  iterationMetrics: ThroughputGaugeIterationMetrics[];
+  rangePercentile?: number;
 }
 
 interface GaugeMetric {
@@ -21,15 +34,18 @@ function finiteValues(values: Array<number | null>): number[] {
   return values.filter((value): value is number => value !== null && Number.isFinite(value)).sort((left, right) => left - right);
 }
 
-function gaugeRange(values: number[]): { min: number; max: number } {
+function gaugeRange(values: number[], upperPercentile?: number): { min: number; max: number } {
   if (values.length === 0) return { min: 0, max: 1 };
   let min = Number.POSITIVE_INFINITY;
-  let max = Number.NEGATIVE_INFINITY;
+  let observedMax = Number.NEGATIVE_INFINITY;
   for (const value of values) {
     min = Math.min(min, value);
-    max = Math.max(max, value);
+    observedMax = Math.max(observedMax, value);
   }
 
+  const percentileMax =
+    upperPercentile === undefined ? null : percentile(values, upperPercentile);
+  const max = percentileMax ?? observedMax;
   const padding = max * 0.1;
   const rangeMin = Math.max(0, min - padding);
   const rangeMax = Math.max(max + padding, rangeMin + 1);
@@ -49,7 +65,17 @@ function formatGaugeValue(value: number | null): string {
   return formatNumber(value, 2);
 }
 
-function Gauge({ metric, range, p95 }: { metric: GaugeMetric; range: { min: number; max: number }; p95: number | null }) {
+function Gauge({
+  metric,
+  range,
+  p95,
+  rangePercentile,
+}: {
+  metric: GaugeMetric;
+  range: { min: number; max: number };
+  p95: number | null;
+  rangePercentile?: number;
+}) {
   const tooltipId = useId();
   const normalized = metric.value === null ? 0 : Math.max(0, Math.min(1, (metric.value - range.min) / (range.max - range.min)));
   const angle = -120 + normalized * 240;
@@ -70,6 +96,8 @@ function Gauge({ metric, range, p95 }: { metric: GaugeMetric; range: { min: numb
         </button>
         <span id={tooltipId} className="gauge-card__info-tooltip" role="tooltip">
           {metric.description}
+          {rangePercentile !== undefined &&
+            ` The dial scale is capped at p${rangePercentile} so rare catch-up outliers do not flatten normal cycles; the aggregate value and p95 remain exact.`}
         </span>
       </span>
       <svg className="gauge" viewBox="0 0 160 116" role="img" aria-label={`${metric.label}: ${formatGaugeValue(metric.value)} ${metric.unit}`}>
@@ -89,12 +117,12 @@ function Gauge({ metric, range, p95 }: { metric: GaugeMetric; range: { min: numb
   );
 }
 
-export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughputGaugesProps) {
+export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile }: RunThroughputGaugesProps) {
   const displayed = metrics;
   const gaugeMetrics: GaugeMetric[] = [
     {
       label: 'Kusto read throughput',
-      value: displayed?.kustoReadThroughputRowsPerSec ?? 0,
+      value: displayed?.kustoReadThroughputRowsPerSec ?? null,
       unit: 'rows/sec',
       color: '#38bdf8',
       description: 'Raw source rows read per second during Kusto query + row mapping time.',
@@ -102,7 +130,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
     },
     {
       label: 'Processing throughput',
-      value: displayed?.processingThroughputRowsPerSec ?? 0,
+      value: displayed?.processingThroughputRowsPerSec ?? null,
       unit: 'rows/sec',
       color: '#34d399',
       description: 'Raw source rows processed per second over total cycle/run wall time.',
@@ -110,7 +138,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
     },
     {
       label: 'Event throughput',
-      value: displayed?.eventThroughputEventsPerSec ?? 0,
+      value: displayed?.eventThroughputEventsPerSec ?? null,
       unit: 'events/sec',
       color: '#f59e0b',
       description: 'Finalized output events/interactions per second over total cycle/run wall time.',
@@ -126,7 +154,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
     },
     {
       label: 'Checkpoint velocity',
-      value: displayed?.checkpointVelocitySourcePerWall ?? 0,
+      value: displayed?.checkpointVelocitySourcePerWall ?? null,
       unit: 'src sec/wall sec',
       color: '#fb7185',
       description: 'Source-time seconds successfully advanced per wall-clock second; >1 catches up, <1 falls behind.',
@@ -139,7 +167,15 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics }: RunThroughput
       {gaugeMetrics.map((metric) => (
         (() => {
           const values = finiteValues(metric.rangeValues.length > 0 ? metric.rangeValues : [metric.value]);
-          return <Gauge key={metric.label} metric={metric} range={gaugeRange(values)} p95={percentile(values, 95)} />;
+          return (
+            <Gauge
+              key={metric.label}
+              metric={metric}
+              range={gaugeRange(values, rangePercentile)}
+              p95={percentile(values, 95)}
+              rangePercentile={rangePercentile}
+            />
+          );
         })()
       ))}
     </div>

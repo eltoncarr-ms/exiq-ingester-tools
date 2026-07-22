@@ -1,10 +1,11 @@
 # Kusto benchmark visualizer
 
-Minimal Vite/React client for schemaVersion `1` Kusto-direct ExIQ ingestion benchmark artifacts, plus a second **Poll
-Telemetry** page for the `PollTelemetry__Sink=jsonl` cursor-poller stream. The two pages share only generic UI
-primitives, formatting, and file-picker patterns; each has its own isolated parser and data model, switched by a
-dependency-free tab bar (`AppShell.tsx`) that keeps both pages mounted so switching tabs never resets either page's
-loaded state.
+Minimal Vite/React client for schemaVersion `1` Kusto-direct ExIQ ingestion benchmark artifacts, a **Poll
+Telemetry** page for the `PollTelemetry__Sink=jsonl` cursor-poller stream, and an **App Insights** page for
+completed `CursorPoll.Cycle` rows from Azure Monitor. The three pages share only generic UI primitives,
+formatting, and file-picker patterns; each has its own isolated parser and data model, switched by a
+dependency-free tab bar (`AppShell.tsx`) that keeps all three pages mounted so switching tabs never resets any
+page's loaded state.
 
 ## Run locally
 
@@ -14,7 +15,7 @@ npm install
 npm run dev
 ```
 
-Use the **Benchmark** / **Poll Telemetry** tabs at the top of the page to switch views.
+Use the **Benchmark** / **Poll Telemetry** / **App Insights** tabs at the top of the page to switch views.
 
 ### Benchmark page
 
@@ -42,7 +43,50 @@ arrive; the header shows the selected source's cycle count and full-run duration
 tags, a running warning count for malformed or unrecognized lines, and the run hero surfaces a live/static status
 badge and any load error.
 
-## Build
+### App Insights page
+
+Accepts completed `CursorPoll.Cycle` rows in three input modes — all normalized through the same typed DTO path:
+
+- **Load fixture**: the checked-in `SAMPLE_RAW_ROWS` from `src/appinsights/sample.ts` covering singleton, sharded, bulk, contention, validation-failure, cancelled, missing-optional-fields, mixed-schema (pre-schema), observed-zero, and unknown-additive-fact scenarios.
+- **Load exported JSON**: a user-selected JSON file exported from Azure Monitor Log Analytics — either a flat array of row objects (`RawCycleRow[]`) or the standard tabular export format (`{ tables: [{ columns, rows }] }`).
+- **Query live** (requires the local server — see below): a loopback HTTP `POST /api/query` call to `server/appInsightsQueryServer.ts`, which uses the current Azure CLI identity to query Azure Monitor and returns raw rows the page normalizes client-side.
+
+The page displays seven content areas: a filter/selector bar, a fleet summary panel, a per-shard fleet table, backlog and paging health, mode-aware Kusto pipeline stats, Cosmos partition-batch outcomes and partial RU, and a cycle-detail fact list for the selected row.
+
+Semantic rules enforced:
+- Fleet throughput = `sum(records) / wallClockSeconds` — **not** `avg(recordsPerSec)`.
+- Backlog is shown per-shard and uses `max` for fleet health — **never summed** across shards.
+- Legacy and drain-safe `kustoMs` are displayed separately (different timing boundaries).
+- Legacy `mapMs` and `rowsScanned` are labelled "unknown (legacy)", never substituted with 0.
+- `sdkFailedServiceRequestCount` is labelled "SDK failed service requests" — **not** "retries".
+- `terminal429OperationCount` is labelled "terminal 429 operations" — **not** "total 429s".
+- Cosmos write outcomes are labelled as **partition-batch** outcomes.
+- All RU fields carry an explicit **"partial/incomplete"** completeness label (successful transactional interaction-write RU and successful snapshot RU are still unavailable from the producer).
+
+#### Live query local server
+
+The server is an optional companion and is **not required** for `npm test`, `npm run typecheck:test`, or `npm run build`. It binds to `127.0.0.1` only (never `0.0.0.0`) and accepts only bounded dashboard parameters — never arbitrary KQL.
+
+Prerequisites (packages not installable in the sandbox; install separately with real registry access):
+
+```cmd
+npm install @azure/identity @azure/monitor-query
+```
+
+Required RBAC on the target Log Analytics workspace or App Insights resource: **Log Analytics Reader** or **Monitoring Reader**.
+
+Start the server:
+
+```cmd
+set WORKSPACE_ID=<your-log-analytics-workspace-id-or-app-insights-resource-id>
+set TENANT_ID=<optional-tenant-id-for-cross-tenant>
+npm run server
+```
+
+The server listens on port 7432 by default (`QUERY_SERVER_PORT` env var overrides). The browser client's "Query live" control must match this port.
+
+> **Known limitation**: `npm run typecheck:server` (`tsc -p tsconfig.server.json`) is unverified in this sandbox because `@azure/identity` and `@azure/monitor-query` are not installable. It should compile once a developer installs those packages with real registry access.
+
 
 ```cmd
 cd tools\kusto-benchmark-visualizer

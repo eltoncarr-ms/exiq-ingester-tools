@@ -162,7 +162,12 @@ button, input { font: inherit; }
 .metric-strip { gap: 12px; margin-bottom: 16px; }
 .metric-strip--wrap { flex-wrap: wrap; }
 .metric-strip--wrap .metric-card { flex: 1 1 150px; }
-.metric-card { background: rgba(11, 16, 32, 0.62); border: 1px solid var(--line); border-radius: 14px; flex: 1; min-width: 150px; padding: 14px; }
+.metric-card { background: rgba(11, 16, 32, 0.62); border: 1px solid var(--line); border-radius: 14px; flex: 1; min-width: 150px; padding: 14px; position: relative; }
+.metric-card__info { position: absolute; right: 10px; top: 10px; }
+.metric-card__info .gauge-card__info { position: static; }
+.metric-details { margin-bottom: 16px; }
+.metric-details > summary { color: #bfdbfe; cursor: pointer; font-size: 13px; font-weight: 800; margin-bottom: 12px; }
+.metric-details[open] > summary { margin-bottom: 12px; }
 .metric-card--compact { min-width: 0; }
 .metric-card__label { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
 .metric-card__value { font-size: 24px; font-weight: 800; }
