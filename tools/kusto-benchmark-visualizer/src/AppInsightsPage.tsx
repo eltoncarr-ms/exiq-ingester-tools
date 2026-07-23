@@ -1,16 +1,15 @@
 /**
  * App Insights completed-cycle dashboard page.
  *
- * Three input modes, all normalized through the same path (see src/appinsights/query.ts):
- *   - Fixture: checked-in sample rows
+ * Two input modes, both normalized through the same path (see src/appinsights/query.ts):
  *   - File: user-selected exported-query JSON
- *   - Live: loopback HTTP call to the local query server
+ *   - Live: periodically refreshed loopback HTTP calls to the local query server
  *
  * Per AI-13: on a failed live refresh the page retains its last-good rows.
  * Per AI-02: this page does not import poll/types.ts, poll/derive.ts, or any
  *            poll-specific component.
  */
-import { useCallback, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
   formatCompactNumber,
   formatDuration,
@@ -32,7 +31,7 @@ import {
 import { loadCompletedCycles, DEFAULT_QUERY_SERVER_PORT } from './appinsights/query';
 import type { CompletedCycleRow } from './appinsights/types';
 
-type SourceMode = 'idle' | 'fixture' | 'file' | 'live';
+type SourceMode = 'idle' | 'file' | 'live';
 
 function nullableNum(v: number | null, digits = 0): string {
   return v === null ? '—' : formatNumber(v, digits);
@@ -86,9 +85,8 @@ function MetricCard({
 export function AppInsightsPage() {
   const [mode, setMode] = useState<SourceMode>('idle');
   const [rows, setRows] = useState<CompletedCycleRow[]>([]);
-  const [lastGoodRows, setLastGoodRows] = useState<CompletedCycleRow[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [activeLoad, setActiveLoad] = useState<'file' | 'live' | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   // Filters
@@ -97,9 +95,11 @@ export function AppInsightsPage() {
   const [filterMode, setFilterMode] = useState('');
 
   // Live config
-  const [livePort, setLivePort] = useState(DEFAULT_QUERY_SERVER_PORT);
   const [liveAppRole, setLiveAppRole] = useState('cursor-poller-local');
   const [liveLookback, setLiveLookback] = useState(24);
+  const [liveRefreshSeconds, setLiveRefreshSeconds] = useState(30);
+  const [livePolling, setLivePolling] = useState(false);
+  const busy = activeLoad !== null;
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -109,41 +109,23 @@ export function AppInsightsPage() {
   const resetAll = useCallback(() => {
     sessionRef.current += 1;
     setRows([]);
-    setLastGoodRows([]);
     setMode('idle');
     setLoadError(null);
-    setBusy(false);
+    setActiveLoad(null);
+    setLivePolling(false);
     setSelectedRunId(null);
   }, []);
 
   const applyRows = useCallback((newRows: CompletedCycleRow[]) => {
     setRows(newRows);
-    setLastGoodRows(newRows);
     setLoadError(null);
   }, []);
-
-  const loadFixture = useCallback(async () => {
-    sessionRef.current += 1;
-    const gen = sessionRef.current;
-    setBusy(true);
-    setLoadError(null);
-    try {
-      const result = await loadCompletedCycles({ kind: 'fixture' });
-      if (sessionRef.current !== gen) return;
-      applyRows(result);
-      setMode('fixture');
-    } catch (err) {
-      if (sessionRef.current !== gen) return;
-      setLoadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (sessionRef.current === gen) setBusy(false);
-    }
-  }, [applyRows]);
 
   const loadFile = useCallback(async (file: File) => {
     sessionRef.current += 1;
     const gen = sessionRef.current;
-    setBusy(true);
+    setLivePolling(false);
+    setActiveLoad('file');
     setLoadError(null);
     setSelectedRunId(null);
     try {
@@ -155,7 +137,7 @@ export function AppInsightsPage() {
       if (sessionRef.current !== gen) return;
       setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (sessionRef.current === gen) setBusy(false);
+      if (sessionRef.current === gen) setActiveLoad(null);
     }
   }, [applyRows]);
 
@@ -166,13 +148,13 @@ export function AppInsightsPage() {
     }
     sessionRef.current += 1;
     const gen = sessionRef.current;
-    setBusy(true);
+    setActiveLoad('live');
     setLoadError(null);
     // Keep last-good rows visible while refreshing (AI-13)
     try {
       const result = await loadCompletedCycles({
         kind: 'live',
-        port: livePort,
+        port: DEFAULT_QUERY_SERVER_PORT,
         params: { appRoleNameFilter: liveAppRole.trim(), lookbackHours: liveLookback },
       });
       if (sessionRef.current !== gen) return;
@@ -181,16 +163,50 @@ export function AppInsightsPage() {
     } catch (err) {
       if (sessionRef.current !== gen) return;
       // On failure, retain last-good rows and show an error (AI-13)
-      setRows(lastGoodRows);
       setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (sessionRef.current === gen) setBusy(false);
+      if (sessionRef.current === gen) setActiveLoad(null);
     }
-  }, [applyRows, lastGoodRows, liveAppRole, liveLookback, livePort]);
+  }, [applyRows, liveAppRole, liveLookback]);
+
+  const toggleLivePolling = useCallback(() => {
+    if (livePolling) {
+      sessionRef.current += 1;
+      setLivePolling(false);
+      setActiveLoad(null);
+      return;
+    }
+    if (!liveAppRole.trim()) {
+      setLoadError('Enter an application role name before polling live.');
+      return;
+    }
+    setLivePolling(true);
+  }, [liveAppRole, livePolling]);
+
+  useEffect(() => {
+    if (!livePolling) return undefined;
+
+    let disposed = false;
+    let timer: number | undefined;
+
+    const tick = async () => {
+      await loadLive();
+      if (!disposed) {
+        timer = window.setTimeout(tick, liveRefreshSeconds * 1000);
+      }
+    };
+
+    void tick();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [livePolling, liveRefreshSeconds, loadLive]);
 
   const onFileInputChange = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
+      e.target.value = '';
       if (file) void loadFile(file);
     },
     [loadFile],
@@ -247,84 +263,94 @@ export function AppInsightsPage() {
 
   return (
     <div className="app">
-      <main className="app__main">
-      {/* ── Benchmark selector / input controls ─────────────────────────── */}
-      <Panel title="App Insights — Completed Cycle Dashboard" eyebrow="CursorPoll.Cycle">
-        <div className="poll-controls-row">
-          <button type="button" className="btn" onClick={() => void loadFixture()} disabled={busy}>
-            {busy && mode === 'fixture' ? 'Loading…' : 'Load fixture'}
-          </button>
+      <header className="app__bar appinsights-header">
+        <div className="app__brand">
+          <span className="app__logo">◎</span>
+          <div>
+            <div className="app__title">App Insights</div>
+            <div className="app__sub">CursorPoll.Cycle completed-cycle telemetry</div>
+          </div>
+        </div>
+        <div className="app__actions appinsights-header__actions">
           <button
             type="button"
-            className="btn"
+            className="btn btn--sm"
             onClick={() => fileInputRef.current?.click()}
             disabled={busy}
           >
-            Load exported JSON
+            Load .json
           </button>
           <input
             ref={fileInputRef}
+            className="dropzone__input"
             type="file"
             accept=".json"
-            style={{ display: 'none' }}
             onChange={onFileInputChange}
           />
+          <label className="appinsights-header__field appinsights-header__field--role">
+            <span>App role</span>
+            <input
+              type="text"
+              value={liveAppRole}
+              onChange={(event) => setLiveAppRole(event.target.value)}
+              placeholder="cursor-poller-local"
+            />
+          </label>
+          <label className="appinsights-header__field">
+            <span>Lookback (h)</span>
+            <input
+              type="number"
+              value={liveLookback}
+              min={0.25}
+              max={168}
+              step={0.25}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isFinite(value)) setLiveLookback(Math.max(0.25, Math.min(168, value)));
+              }}
+            />
+          </label>
+          <label className="appinsights-header__field">
+            <span>Refresh (s)</span>
+            <input
+              type="number"
+              value={liveRefreshSeconds}
+              min={1}
+              max={3600}
+              step={1}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isFinite(value)) setLiveRefreshSeconds(Math.max(1, Math.min(3600, value)));
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className={`btn btn--sm appinsights-header__poll ${livePolling ? 'btn--status-ok' : 'btn--ghost'}`}
+            onClick={toggleLivePolling}
+            disabled={activeLoad === 'file'}
+            aria-busy={activeLoad === 'live'}
+            aria-pressed={livePolling}
+          >
+            {activeLoad === 'live' && <span className="spinner" aria-hidden="true" />}
+            {livePolling ? 'Stop polling' : 'Poll live'}
+          </button>
           {loaded && (
-            <button type="button" className="btn btn--secondary" onClick={resetAll}>
+            <button type="button" className="btn btn--sm btn--ghost" onClick={resetAll}>
               Clear
             </button>
           )}
         </div>
-
-        <details style={{ marginTop: 8 }}>
-          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>Live query (requires local server)</summary>
-          <div className="poll-controls-row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-            <label>
-              App role name{' '}
-              <input
-                type="text"
-                value={liveAppRole}
-                onChange={(e) => setLiveAppRole(e.target.value)}
-                placeholder="eiq-test-row-wus3-api-xnmmvm"
-                style={{ width: 280 }}
-              />
-            </label>
-            <label>
-              Lookback (h){' '}
-              <input
-                type="number"
-                value={liveLookback}
-                min={1}
-                max={168}
-                onChange={(e) => setLiveLookback(Math.max(1, Math.min(168, Number(e.target.value))))}
-                style={{ width: 60 }}
-              />
-            </label>
-            <label>
-              Server port{' '}
-              <input
-                type="number"
-                value={livePort}
-                min={1024}
-                max={65535}
-                onChange={(e) => setLivePort(Number(e.target.value))}
-                style={{ width: 80 }}
-              />
-            </label>
-            <button type="button" className="btn" onClick={() => void loadLive()} disabled={busy}>
-              {busy && mode === 'live' ? 'Querying…' : 'Query live'}
-            </button>
-          </div>
-        </details>
-
+      </header>
+      <main className="app__main">
         {loadError && (
-          <div className="load-error" role="alert" style={{ marginTop: 8, color: 'var(--color-danger, #f87171)' }}>
+          <div className="load-error" role="alert">
             {loadError}
           </div>
         )}
 
         {loaded && (
-          <div className="poll-controls-row" style={{ marginTop: 12, flexWrap: 'wrap' }}>
+          <div className="appinsights-filter-bar">
             <label>
               Source{' '}
               <select value={filterSource} onChange={(e) => setFilterSource(e.target.value)}>
@@ -352,7 +378,6 @@ export function AppInsightsPage() {
             )}
           </div>
         )}
-      </Panel>
 
       {loaded && (
         <>
@@ -394,68 +419,59 @@ export function AppInsightsPage() {
                 detail="interactionWriteRu summed across both bulk and transactional interaction writes. Snapshot RU remains a separate diagnostic gap."
               />
             </div>
+            <h3 className="summary-subheading">Throughput gauges</h3>
+            <ThroughputGaugeGrid
+              metrics={throughput.metrics}
+              iterationMetrics={throughput.iterationMetrics}
+              rangePercentile={95}
+            />
             <details className="metric-details">
               <summary>Additional summary details</summary>
               <div className="metric-strip metric-strip--wrap">
-              <MetricCard
-                label="Checkpoints"
-                value={formatNumber(summary.checkpointCount, 0)}
-                detail="Successful cycles that durably committed positive source-time progress."
-              />
-              <MetricCard
-                label="Fleet throughput"
-                value={summary.fleetThroughputPerSec !== null ? `${formatNumber(summary.fleetThroughputPerSec, 1)}/s` : '—'}
-                detail="Finalized events divided by the selected event-time span. This is sum(records)/wall-clock seconds, not an average of per-cycle recordsPerSec."
-              />
-              <MetricCard
-                label="Physical raw scan rows"
-                value={nullableCompact(summary.totalInputRows)}
-                detail="rawScanRows summed across cycle rows. This is the physical per-iteration count and can double-count resumed pages."
-              />
-              <MetricCard
-                label="Non-overlapping band rows"
-                value={nullableCompact(summary.totalRawBandRows)}
-                detail="rawBandRows deduped by bandId so resumed pages do not double-count interval totals."
-              />
-              <MetricCard
-                label="Committed progress"
-                value={summary.totalCommittedProgressSeconds !== null ? `${formatNumber(summary.totalCommittedProgressSeconds, 0)} s` : '—'}
-                detail="Total durable source-time seconds committed across the selected cycle rows."
-              />
-              <MetricCard
-                label="Max backlog"
-                value={summary.maxBacklogAfterSeconds !== null ? `${formatNumber(summary.maxBacklogAfterSeconds, 0)} s` : '—'}
-                detail="Worst remaining backlog across shards after a cycle completes. Per-shard backlog is never summed."
-              />
-              <MetricCard
-                label="Lane attempts"
-                value={formatNumber(summary.laneAttempts, 0)}
-                detail="Completed lane-attempt rows included by the current filters."
-              />
-              <MetricCard
-                label="Partial Cosmos RU"
-                value={nullableCompact(summary.partialTotalRu)}
-                detail="Diagnostic totalCosmosRu only. This remains partial because snapshot success RU is still unavailable."
-                warn={summary.partialTotalRu !== null}
-              />
-            </div>
-            </details>
-            <details className="metric-details">
-              <summary>Progress-kind breakdown</summary>
+                <MetricCard
+                  label="Checkpoints"
+                  value={formatNumber(summary.checkpointCount, 0)}
+                  detail="Successful durable continuation saves and completed-band commits."
+                />
+                <MetricCard
+                  label="Fleet throughput"
+                  value={summary.fleetThroughputPerSec !== null ? `${formatNumber(summary.fleetThroughputPerSec, 1)}/s` : '—'}
+                  detail="Finalized events divided by the selected event-time span. This is sum(records)/wall-clock seconds, not an average of per-cycle recordsPerSec."
+                />
+                <MetricCard
+                  label="Physical raw scan rows"
+                  value={nullableCompact(summary.totalInputRows)}
+                  detail="rawScanRows summed across cycle rows. This is the physical per-iteration count and can double-count resumed pages."
+                />
+                <MetricCard
+                  label="Committed progress"
+                  value={summary.totalCommittedProgressSeconds !== null ? `${formatNumber(summary.totalCommittedProgressSeconds, 0)} s` : '—'}
+                  detail="Total durable source-time seconds committed by completed bands. Continuation-only cycles correctly contribute zero."
+                />
+                <MetricCard
+                  label="Max backlog"
+                  value={summary.maxBacklogAfterSeconds !== null ? `${formatNumber(summary.maxBacklogAfterSeconds, 0)} s` : '—'}
+                  detail="Worst remaining backlog across shards after a cycle completes. Per-shard backlog is never summed."
+                />
+                <MetricCard
+                  label="Lane attempts"
+                  value={formatNumber(summary.laneAttempts, 0)}
+                  detail="Completed lane-attempt rows included by the current filters."
+                />
+                <MetricCard
+                  label="Partial Cosmos RU"
+                  value={nullableCompact(summary.partialTotalRu)}
+                  detail="Diagnostic totalCosmosRu only. This remains partial because snapshot success RU is still unavailable."
+                  warn={summary.partialTotalRu !== null}
+                />
+              </div>
+              <h3 className="summary-subheading summary-subheading--details">Progress-kind breakdown</h3>
               <div className="poll-outcome-row" aria-label="Progress kind counts">
                 <span className="tag">{formatNumber(summary.progressKindCounts.bandCommit, 0)} bandCommit</span>
                 <span className="tag">{formatNumber(summary.progressKindCounts.continuation, 0)} continuation</span>
                 <span className="tag">{formatNumber(summary.progressKindCounts.noWork, 0)} noWork</span>
                 <span className="tag">{formatNumber(summary.progressKindCounts.unknown, 0)} absent</span>
               </div>
-            </details>
-            <details className="metric-details">
-              <summary>Throughput gauges</summary>
-              <ThroughputGaugeGrid
-                metrics={throughput.metrics}
-                iterationMetrics={throughput.iterationMetrics}
-                rangePercentile={95}
-              />
             </details>
           </Panel>
 
@@ -620,6 +636,11 @@ export function AppInsightsPage() {
             </details>
           </Panel>
         </>
+      )}
+      {!loaded && !loadError && (
+        <div className="appinsights-empty">
+          Load an exported App Insights <code>.json</code> file or start live polling.
+        </div>
       )}
       </main>
     </div>

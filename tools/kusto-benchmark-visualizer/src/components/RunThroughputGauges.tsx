@@ -157,7 +157,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile
       value: displayed?.checkpointVelocitySourcePerWall ?? null,
       unit: 'src sec/wall sec',
       color: '#fb7185',
-      description: 'Source-time seconds successfully advanced per wall-clock second; >1 catches up, <1 falls behind.',
+      description: 'Source-time seconds advanced between durable continuation or band checkpoints per wall-clock second; >1 catches up, <1 falls behind.',
       rangeValues: iterationMetrics.map((candidate) => candidate.checkpointVelocitySourcePerWall),
     },
   ];

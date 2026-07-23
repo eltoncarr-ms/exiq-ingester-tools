@@ -17,7 +17,7 @@ import { SAMPLE_RAW_ROWS } from './sample';
 export interface LiveQueryParams {
   /** Application role name to filter on (e.g. "eiq-test-row-wus3-api-xnmmvm"). */
   appRoleNameFilter: string;
-  /** Lookback window in hours (1–168). */
+  /** Lookback window in hours (0.25–168); fractional hours are supported. */
   lookbackHours: number;
 }
 

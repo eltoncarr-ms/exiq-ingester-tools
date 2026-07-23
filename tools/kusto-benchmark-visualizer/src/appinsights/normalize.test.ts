@@ -80,6 +80,7 @@ describe('normalizeRows — missing vs zero', () => {
     expect(row.backlogBeforeSeconds).toBe(0);
     expect(row.backlogAfterSeconds).toBe(0);
     expect(row.committedProgressSeconds).toBe(0);
+    expect(row.checkpointProgressSeconds).toBeNull();
     expect(row.rawScanRows).toBe(0);
     expect(row.rawBandRows).toBe(0);
     expect(row.cursorLagAfterSeconds).toBe(0);
@@ -87,6 +88,16 @@ describe('normalizeRows — missing vs zero', () => {
     expect(row.cosmosAttempted).toBe(0);
     expect(row.sdkFailedServiceRequestCount).toBe(0);
     expect(row.terminal429OperationCount).toBe(0);
+  });
+
+  it('preserves page-level checkpoint progress independently from committed progress', () => {
+    const row = normalizeRows([continuedBandResumedRow({
+      CommittedProgressSeconds: 0,
+      CheckpointProgressSeconds: 465,
+    })])[0]!;
+
+    expect(row.committedProgressSeconds).toBe(0);
+    expect(row.checkpointProgressSeconds).toBe(465);
   });
 
   it('preserves null booleans without coercing to false', () => {

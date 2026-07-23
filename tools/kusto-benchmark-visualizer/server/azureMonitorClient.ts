@@ -26,7 +26,7 @@ let ToNullableBool = (value:dynamic) { case(tolower(tostring(value)) == 'true', 
 let PositiveTicksToUtc = (ticks:long) { iif(isnull(ticks) or ticks <= 0, datetime(null), datetime(0001-01-01) + (ticks * 1tick)) };
 let TicksToSeconds = (ticks:long) { iif(isnull(ticks), real(null), ticks / 1e7) };
 AppEvents
-| where TimeGenerated > ago({LOOKBACK}h)
+| where TimeGenerated > ago({LOOKBACK} * 1h)
 | where AppRoleName == '{APP_ROLE}'
 | where Name == 'CursorPoll.Cycle'
 | extend IngestionTimeUtc = ingestion_time()
@@ -87,6 +87,7 @@ AppEvents
 | extend CursorBeforeTicks = tolong(Measurements['cursorBefore'])
 | extend CursorAfterTicks = tolong(Measurements['cursorAfter'])
 | extend CommittedProgressTicks = tolong(Measurements['committedProgressTicks'])
+| extend CheckpointProgressTicks = tolong(Measurements['checkpointProgressTicks'])
 | extend EligibleThroughTicks = tolong(Measurements['eligibleThroughTicks'])
 | extend BacklogBeforeTicks = tolong(Measurements['backlogBeforeTicks'])
 | extend BacklogAfterTicks = tolong(Measurements['backlogAfterTicks'])
@@ -95,6 +96,7 @@ AppEvents
 | extend CommittedSourceVersionUtc = PositiveTicksToUtc(tolong(Measurements['committedSourceVersion']))
 | extend EligibleThroughUtc = PositiveTicksToUtc(EligibleThroughTicks)
 | extend CommittedProgressSeconds = TicksToSeconds(CommittedProgressTicks)
+| extend CheckpointProgressSeconds = TicksToSeconds(CheckpointProgressTicks)
 | extend BacklogBeforeSeconds = TicksToSeconds(BacklogBeforeTicks)
 | extend BacklogAfterSeconds = TicksToSeconds(BacklogAfterTicks)
 | extend CursorLagAfterSeconds = todouble(Measurements['cursorLagAfterSeconds'])
@@ -157,7 +159,7 @@ AppEvents
     Records, RecordsPerSec, RowsScanned, RowsReturned, RowsMapped,
     DuplicateCollapsed, ContractInvalid, MaxRows,
     HasMore, BandDrained, ResumedPending, CaughtUp,
-    CursorBeforeUtc, CursorAfterUtc, CommittedSourceVersionUtc, CommittedProgressSeconds,
+    CursorBeforeUtc, CursorAfterUtc, CommittedSourceVersionUtc, CommittedProgressSeconds, CheckpointProgressSeconds,
     EligibleThroughUtc, BacklogBeforeSeconds, BacklogAfterSeconds, CursorLagAfterSeconds,
     SealAfterUtc, SealBeforeUtc, RawFromUtc, RawToUtc,
     IdleGapSeconds, RereadCandidates, RawScanRows, RawBandRows,
@@ -196,12 +198,13 @@ export class AzureMonitorQueryClient implements AppInsightsQueryClient {
   }
 
   async queryCompletedCycles(params: QueryParams): Promise<RawCycleRow[]> {
+    const lookbackSeconds = Math.ceil(params.lookbackHours * 60 * 60);
     const kql = COMPLETED_CYCLE_KQL
-      .replace('{LOOKBACK}', String(Math.round(params.lookbackHours)))
+      .replace('{LOOKBACK}', String(params.lookbackHours))
       .replace('{APP_ROLE}', params.appRoleNameFilter.replace(/'/g, "\\'"));
 
     const result = await this.client.queryWorkspace(this.workspaceId, kql, {
-      duration: `PT${Math.round(params.lookbackHours)}H`,
+      duration: `PT${lookbackSeconds}S`,
     });
 
     if (result.status !== 'Success') {

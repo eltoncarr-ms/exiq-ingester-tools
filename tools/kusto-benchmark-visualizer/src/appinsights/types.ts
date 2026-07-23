@@ -249,6 +249,11 @@ export interface CompletedCycleRow {
    * null = fact was unavailable.
    */
   committedProgressSeconds: number | null;
+  /**
+   * Source-time progress between durable page checkpoints. Unlike committed
+   * progress, continuation pages can report a positive value.
+   */
+  checkpointProgressSeconds: number | null;
   /** Eligible-through watermark for this cycle's source window. */
   eligibleThroughUtc: string | null;
   /**

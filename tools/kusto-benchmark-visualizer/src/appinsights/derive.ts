@@ -52,11 +52,11 @@ export interface SummaryStats {
   totalInputRows: number | null;
   /**
    * Non-overlapping raw rows deduped by bandId.
-   * Even though the producer emits rawBandRows on at most one row per band,
-   * the client still dedupes defensively by bandId to prevent double counting.
+   * The producer repeats rawBandRows on resumed pages so every iteration is
+   * self-describing; deduplication prevents interval double counting.
    */
   totalRawBandRows: number | null;
-  /** Successful cycles that durably committed positive source-time progress. */
+  /** Successful durable continuation saves and completed-band commits. */
   checkpointCount: number;
   /** Average total cycle duration across lane attempts with an observed totalMs. */
   avgCycleMs: number | null;
@@ -175,8 +175,7 @@ export function computeSummary(rows: CompletedCycleRow[], wallClockSeconds: numb
       totalRawBandRows = (totalRawBandRows ?? 0) + row.rawBandRows;
     }
     if (row.outcome === 'success' &&
-      row.committedProgressSeconds !== null &&
-      row.committedProgressSeconds > 0) {
+      (row.progressKind === 'continuation' || row.progressKind === 'bandCommit')) {
       checkpointCount++;
     }
     if (row.totalMs !== null) {
@@ -291,8 +290,8 @@ export function computeThroughputStats(rows: CompletedCycleRow[]): AppInsightsTh
         ? row.kustoMs + row.mapMs
         : null;
     const advanceSeconds =
-      successful && row.committedProgressSeconds !== null
-        ? Math.max(0, row.committedProgressSeconds)
+      successful
+        ? Math.max(0, row.checkpointProgressSeconds ?? row.committedProgressSeconds ?? 0)
         : 0;
 
     if (queryAndMapMs !== null && scanned !== null) {

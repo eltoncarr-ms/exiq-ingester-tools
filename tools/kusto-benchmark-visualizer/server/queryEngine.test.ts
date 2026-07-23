@@ -171,6 +171,11 @@ describe('handleRequest — loopback server', () => {
     expect(resp.status).toBe(400);
   });
 
+  it('accepts a fractional lookbackHours value', async () => {
+    const resp = await postQuery(srv.port, { appRoleNameFilter: 'myapp', lookbackHours: 0.5 });
+    expect(resp.status).toBe(200);
+  });
+
   it('returns 400 for lookbackHours out of range (999)', async () => {
     const resp = await postQuery(srv.port, { appRoleNameFilter: 'myapp', lookbackHours: 999 });
     expect(resp.status).toBe(400);

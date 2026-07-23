@@ -142,6 +142,17 @@ describe('computeSummary', () => {
     });
   });
 
+  it('counts continuation saves and band commits as durable checkpoints', () => {
+    const rows = normalizeRows([
+      continuedBandFirstPageRow({ ProgressKind: 'continuation', Outcome: 'success' }),
+      continuedBandResumedRow({ ProgressKind: 'continuation', Outcome: 'success' }),
+      bandCommitRow({ ProgressKind: 'bandCommit', Outcome: 'success' }),
+      cancelledRow({ RunId: 'r4', ProgressKind: 'continuation' }),
+    ]);
+
+    expect(computeSummary(rows, 60).checkpointCount).toBe(3);
+  });
+
   it('uses max-not-sum for backlog (fleet worst case, not aggregate)', () => {
     const rows = normalizeRows([
       shardedLaneRow({ ShardId: '0', BacklogAfterSeconds: 300 }),
@@ -166,7 +177,8 @@ describe('computeThroughputStats', () => {
         KustoMs: 3000,
         MapMs: 1000,
         TotalMs: 10000,
-        CommittedProgressSeconds: 20,
+        CommittedProgressSeconds: 0,
+        CheckpointProgressSeconds: 20,
       }),
       shardedLaneRow({
         RunId: 'run-sharded-2',
@@ -176,7 +188,8 @@ describe('computeThroughputStats', () => {
         KustoMs: 1500,
         MapMs: 500,
         TotalMs: 5000,
-        CommittedProgressSeconds: 5,
+        CommittedProgressSeconds: 0,
+        CheckpointProgressSeconds: 5,
       }),
     ]);
 

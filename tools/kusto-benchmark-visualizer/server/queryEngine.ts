@@ -30,7 +30,7 @@ export interface AppInsightsQueryClient {
 }
 
 /** Minimum allowed lookback hours. */
-const MIN_LOOKBACK_HOURS = 1;
+const MIN_LOOKBACK_HOURS = 0.25;
 /** Maximum allowed lookback hours (7 days). */
 const MAX_LOOKBACK_HOURS = 168;
 
