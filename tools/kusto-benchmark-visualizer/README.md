@@ -95,6 +95,29 @@ npm run build
 
 The static output is written to `dist\`.
 
+## Run with Docker
+
+Build and run the production image from the repository root:
+
+```cmd
+docker build -t kusto-benchmark-visualizer tools\kusto-benchmark-visualizer
+docker run --rm -p 8080:8080 kusto-benchmark-visualizer
+```
+
+Open `http://localhost:8080`.
+
+To build and start it in the background with Docker Compose:
+
+```cmd
+docker compose -f tools\kusto-benchmark-visualizer\compose.yaml up --build --detach
+```
+
+Stop and remove the local container with:
+
+```cmd
+docker compose -f tools\kusto-benchmark-visualizer\compose.yaml down
+```
+
 ## Test
 
 ```cmd
