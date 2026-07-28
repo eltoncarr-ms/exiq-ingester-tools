@@ -13,12 +13,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { RawCycleRow } from '../src/appinsights/types.js';
 
 /** Query parameters accepted by the server — bounded dashboard parameters only. */
-export interface QueryParams {
-  /** Application role name to filter on. Non-empty string required. */
-  appRoleNameFilter: string;
-  /** Lookback window in hours. Bounded to [1, 168]. */
-  lookbackHours: number;
-}
+export type QueryParams =
+  | { appRoleNameFilter: string; lookbackHours: number }
+  | { appRoleNameFilter: string; startTimeUtc: string; durationHours: number };
 
 /**
  * Injectable interface for the Azure Monitor query boundary.
@@ -162,6 +159,40 @@ function validateParams(body: unknown): { ok: true; params: QueryParams } | { ok
   const appRoleNameFilter = obj['appRoleNameFilter'];
   if (typeof appRoleNameFilter !== 'string' || appRoleNameFilter.trim() === '') {
     return { ok: false, error: 'appRoleNameFilter must be a non-empty string.' };
+  }
+
+  const hasWindow = 'startTimeUtc' in obj || 'durationHours' in obj;
+  const hasLookback = 'lookbackHours' in obj;
+  if (hasWindow && hasLookback) {
+    return { ok: false, error: 'Provide either lookbackHours or a startTimeUtc+durationHours window, not both.' };
+  }
+
+  if ('startTimeUtc' in obj) {
+    const startTimeUtc = obj['startTimeUtc'];
+    if (typeof startTimeUtc !== 'string' || startTimeUtc.trim() === '') {
+      return { ok: false, error: 'startTimeUtc must be a non-empty string.' };
+    }
+    if (!Number.isFinite(Date.parse(startTimeUtc))) {
+      return { ok: false, error: 'startTimeUtc is not a valid ISO date-time string.' };
+    }
+    const durationHours = obj['durationHours'];
+    if (typeof durationHours !== 'number' || !Number.isFinite(durationHours)) {
+      return { ok: false, error: 'durationHours must be a finite number.' };
+    }
+    if (durationHours <= 0 || durationHours > MAX_LOOKBACK_HOURS) {
+      return {
+        ok: false,
+        error: `durationHours must be between 0 (exclusive) and ${MAX_LOOKBACK_HOURS} (inclusive).`,
+      };
+    }
+    return {
+      ok: true,
+      params: {
+        appRoleNameFilter: (obj['appRoleNameFilter'] as string).trim(),
+        startTimeUtc: startTimeUtc.trim(),
+        durationHours,
+      },
+    };
   }
 
   const lookbackHours = obj['lookbackHours'];

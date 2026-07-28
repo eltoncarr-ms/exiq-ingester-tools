@@ -14,12 +14,21 @@ import type { CompletedCycleRow, TabularQueryExport } from './types';
 import { normalizeRows } from './normalize';
 import { SAMPLE_RAW_ROWS } from './sample';
 
-export interface LiveQueryParams {
-  /** Application role name to filter on (e.g. "eiq-test-row-wus3-api-xnmmvm"). */
-  appRoleNameFilter: string;
-  /** Lookback window in hours (0.25–168); fractional hours are supported. */
-  lookbackHours: number;
-}
+export type LiveQueryParams =
+  | {
+      /** Application role name to filter on (e.g. "eiq-test-row-wus3-api-xnmmvm"). */
+      appRoleNameFilter: string;
+      /** Lookback window in hours (0.25–168); fractional hours are supported. */
+      lookbackHours: number;
+    }
+  | {
+      /** Application role name to filter on. */
+      appRoleNameFilter: string;
+      /** Absolute window start time (UTC ISO string). */
+      startTimeUtc: string;
+      /** Window duration in hours (0–168). */
+      durationHours: number;
+    };
 
 export type QuerySource =
   | { kind: 'fixture' }
@@ -64,10 +73,11 @@ export async function loadCompletedCycles(source: QuerySource): Promise<Complete
         resp = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            appRoleNameFilter: params.appRoleNameFilter,
-            lookbackHours: params.lookbackHours,
-          }),
+          body: JSON.stringify(
+            'lookbackHours' in params
+              ? { appRoleNameFilter: params.appRoleNameFilter, lookbackHours: params.lookbackHours }
+              : { appRoleNameFilter: params.appRoleNameFilter, startTimeUtc: params.startTimeUtc, durationHours: params.durationHours },
+          ),
         });
       } catch (err) {
         throw new Error(

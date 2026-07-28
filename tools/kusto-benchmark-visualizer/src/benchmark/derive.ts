@@ -133,6 +133,7 @@ export interface RunThroughputMetrics {
   compressionRateRowsPerEvent: number | null;
   checkpointAdvanceSeconds: number;
   checkpointVelocitySourcePerWall: number;
+  cosmosWriteThroughputBatchesPerSec: number | null;
 }
 
 export interface IterationThroughputMetrics extends RunThroughputMetrics {
@@ -331,6 +332,7 @@ function buildThroughputMetrics(iterations: BenchmarkIteration[]): RunThroughput
     compressionRateRowsPerEvent: eventsFinalized > 0 ? rowsFetched / eventsFinalized : null,
     checkpointAdvanceSeconds: totalAdvanceSeconds,
     checkpointVelocitySourcePerWall: totalMs > 0 ? totalAdvanceSeconds / (totalMs / 1000) : 0,
+    cosmosWriteThroughputBatchesPerSec: null,
   };
 }
 
@@ -350,6 +352,7 @@ function buildIterationThroughputMetrics(iterations: BenchmarkIteration[]): Iter
       compressionRateRowsPerEvent: eventsFinalized > 0 ? rowsFetched / eventsFinalized : null,
       checkpointAdvanceSeconds: advanceSeconds,
       checkpointVelocitySourcePerWall: totalMs > 0 ? advanceSeconds / (totalMs / 1000) : 0,
+      cosmosWriteThroughputBatchesPerSec: null,
     };
   });
 }

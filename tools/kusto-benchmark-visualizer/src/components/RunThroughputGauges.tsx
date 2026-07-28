@@ -9,7 +9,18 @@ export interface ThroughputGaugeMetrics {
   compressionRateRowsPerEvent: number | null;
   checkpointAdvanceSeconds: number;
   checkpointVelocitySourcePerWall: number | null;
+  cosmosWriteThroughputBatchesPerSec: number | null;
 }
+
+export type GaugeKey =
+  | 'kusto'
+  | 'processing'
+  | 'event'
+  | 'compression'
+  | 'checkpointVelocity'
+  | 'cosmos';
+
+const DEFAULT_GAUGE_KEYS: GaugeKey[] = ['kusto', 'processing', 'event', 'compression', 'checkpointVelocity'];
 
 export interface ThroughputGaugeIterationMetrics extends ThroughputGaugeMetrics {
   iterationId: string;
@@ -19,9 +30,11 @@ interface RunThroughputGaugesProps {
   metrics: ThroughputGaugeMetrics | null;
   iterationMetrics: ThroughputGaugeIterationMetrics[];
   rangePercentile?: number;
+  gauges?: GaugeKey[];
 }
 
 interface GaugeMetric {
+  key: GaugeKey;
   label: string;
   value: number | null;
   unit: string;
@@ -117,10 +130,11 @@ function Gauge({
   );
 }
 
-export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile }: RunThroughputGaugesProps) {
+export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile, gauges }: RunThroughputGaugesProps) {
   const displayed = metrics;
-  const gaugeMetrics: GaugeMetric[] = [
+  const allGauges: GaugeMetric[] = [
     {
+      key: 'kusto',
       label: 'Kusto read throughput',
       value: displayed?.kustoReadThroughputRowsPerSec ?? null,
       unit: 'rows/sec',
@@ -129,6 +143,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile
       rangeValues: iterationMetrics.map((candidate) => candidate.kustoReadThroughputRowsPerSec),
     },
     {
+      key: 'processing',
       label: 'Processing throughput',
       value: displayed?.processingThroughputRowsPerSec ?? null,
       unit: 'rows/sec',
@@ -137,6 +152,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile
       rangeValues: iterationMetrics.map((candidate) => candidate.processingThroughputRowsPerSec),
     },
     {
+      key: 'event',
       label: 'Event throughput',
       value: displayed?.eventThroughputEventsPerSec ?? null,
       unit: 'events/sec',
@@ -145,6 +161,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile
       rangeValues: iterationMetrics.map((candidate) => candidate.eventThroughputEventsPerSec),
     },
     {
+      key: 'compression',
       label: 'Compression rate',
       value: displayed?.compressionRateRowsPerEvent ?? null,
       unit: 'rows/event',
@@ -153,6 +170,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile
       rangeValues: iterationMetrics.map((candidate) => candidate.compressionRateRowsPerEvent),
     },
     {
+      key: 'checkpointVelocity',
       label: 'Checkpoint velocity',
       value: displayed?.checkpointVelocitySourcePerWall ?? null,
       unit: 'src sec/wall sec',
@@ -160,7 +178,20 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile
       description: 'Source-time seconds advanced between durable continuation or band checkpoints per wall-clock second; >1 catches up, <1 falls behind.',
       rangeValues: iterationMetrics.map((candidate) => candidate.checkpointVelocitySourcePerWall),
     },
+    {
+      key: 'cosmos',
+      label: 'Cosmos write throughput',
+      value: displayed?.cosmosWriteThroughputBatchesPerSec ?? null,
+      unit: 'batches/sec',
+      color: '#f472b6',
+      description: 'Successful Cosmos partition-batch writes per second over Cosmos write-stage time.',
+      rangeValues: iterationMetrics.map((candidate) => candidate.cosmosWriteThroughputBatchesPerSec),
+    },
   ];
+
+  const order = gauges ?? DEFAULT_GAUGE_KEYS;
+  const byKey = new Map(allGauges.map((g) => [g.key, g]));
+  const gaugeMetrics = order.map((key) => byKey.get(key)).filter((g): g is GaugeMetric => g !== undefined);
 
   return (
     <div className="gauge-grid">
@@ -169,7 +200,7 @@ export function ThroughputGaugeGrid({ metrics, iterationMetrics, rangePercentile
           const values = finiteValues(metric.rangeValues.length > 0 ? metric.rangeValues : [metric.value]);
           return (
             <Gauge
-              key={metric.label}
+              key={metric.key}
               metric={metric}
               range={gaugeRange(values, rangePercentile)}
               p95={percentile(values, 95)}

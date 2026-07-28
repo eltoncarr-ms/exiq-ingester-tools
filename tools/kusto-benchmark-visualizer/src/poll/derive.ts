@@ -129,6 +129,7 @@ export interface PollRunThroughputMetrics {
   compressionRateRowsPerEvent: number | null;
   checkpointAdvanceSeconds: number;
   checkpointVelocitySourcePerWall: number;
+  cosmosWriteThroughputBatchesPerSec: number | null;
 }
 
 /**
@@ -491,6 +492,7 @@ function buildPollThroughputMetrics(cycles: PollCycleEvent[]): PollRunThroughput
     compressionRateRowsPerEvent: sumRecordsQualifying > 0 ? sumInputRows / sumRecordsQualifying : null,
     checkpointAdvanceSeconds: sumAdvanceSeconds,
     checkpointVelocitySourcePerWall: sumTotalMsAll > 0 ? sumAdvanceSeconds / (sumTotalMsAll / 1000) : 0,
+    cosmosWriteThroughputBatchesPerSec: null,
   };
 }
 
@@ -521,6 +523,7 @@ function buildPollIterationThroughputMetrics(cycles: PollCycleEvent[]): PollIter
       compressionRateRowsPerEvent: cycle.records > 0 ? inputRows / cycle.records : null,
       checkpointAdvanceSeconds: advanceSeconds,
       checkpointVelocitySourcePerWall: totalSec > 0 ? advanceSeconds / totalSec : 0,
+      cosmosWriteThroughputBatchesPerSec: null,
     };
   });
 }

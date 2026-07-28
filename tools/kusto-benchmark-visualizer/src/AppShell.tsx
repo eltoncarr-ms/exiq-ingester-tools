@@ -1,14 +1,16 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { App } from './App';
 import { AppInsightsPage } from './AppInsightsPage';
+import { FocusedDashboardPage } from './FocusedDashboardPage';
 import { PollTelemetryPage } from './PollTelemetryPage';
 
-type PageKey = 'benchmark' | 'poll' | 'appInsights';
+type PageKey = 'benchmark' | 'poll' | 'appInsights' | 'focused';
 
 const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'benchmark', label: 'Benchmark' },
   { key: 'poll', label: 'Poll Telemetry' },
   { key: 'appInsights', label: 'App Insights' },
+  { key: 'focused', label: 'App Insights – Focused' },
 ];
 
 const tabId = (key: PageKey) => `shell-tab-${key}`;
@@ -101,6 +103,15 @@ export function AppShell() {
         hidden={page !== 'appInsights'}
       >
         <AppInsightsPage />
+      </div>
+      <div
+        id={panelId('focused')}
+        role="tabpanel"
+        aria-labelledby={tabId('focused')}
+        className="shell__page"
+        hidden={page !== 'focused'}
+      >
+        <FocusedDashboardPage />
       </div>
     </div>
   );

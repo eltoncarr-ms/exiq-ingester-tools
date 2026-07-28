@@ -288,3 +288,92 @@ describe('handleRequest — loopback server', () => {
     expect(resp.status).toBe(200);
   });
 });
+
+describe('handleRequest — window query branch', () => {
+  it('accepts a valid startTimeUtc + durationHours window', async () => {
+    const resp = await postQuery(srv.port, {
+      appRoleNameFilter: 'myapp',
+      startTimeUtc: '2025-01-15T10:00:00.000Z',
+      durationHours: 24,
+    });
+    expect(resp.status).toBe(200);
+  });
+
+  it('accepts boundary durationHours = 168', async () => {
+    const resp = await postQuery(srv.port, {
+      appRoleNameFilter: 'myapp',
+      startTimeUtc: '2025-01-15T10:00:00.000Z',
+      durationHours: 168,
+    });
+    expect(resp.status).toBe(200);
+  });
+
+  it('rejects durationHours = 0', async () => {
+    const resp = await postQuery(srv.port, {
+      appRoleNameFilter: 'myapp',
+      startTimeUtc: '2025-01-15T10:00:00.000Z',
+      durationHours: 0,
+    });
+    expect(resp.status).toBe(400);
+  });
+
+  it('rejects durationHours > 168', async () => {
+    const resp = await postQuery(srv.port, {
+      appRoleNameFilter: 'myapp',
+      startTimeUtc: '2025-01-15T10:00:00.000Z',
+      durationHours: 169,
+    });
+    expect(resp.status).toBe(400);
+  });
+
+  it('rejects non-parseable startTimeUtc', async () => {
+    const resp = await postQuery(srv.port, {
+      appRoleNameFilter: 'myapp',
+      startTimeUtc: 'not-a-date',
+      durationHours: 24,
+    });
+    expect(resp.status).toBe(400);
+    const body = await resp.json() as Record<string, unknown>;
+    expect(String(body['error'])).toMatch(/startTimeUtc/i);
+  });
+
+  it('rejects mixing lookbackHours with startTimeUtc', async () => {
+    const resp = await postQuery(srv.port, {
+      appRoleNameFilter: 'myapp',
+      lookbackHours: 24,
+      startTimeUtc: '2025-01-15T10:00:00.000Z',
+      durationHours: 24,
+    });
+    expect(resp.status).toBe(400);
+    const body = await resp.json() as Record<string, unknown>;
+    expect(String(body['error'])).toMatch(/not both/i);
+  });
+
+  it('rejects body with neither lookbackHours nor startTimeUtc', async () => {
+    const resp = await postQuery(srv.port, {
+      appRoleNameFilter: 'myapp',
+    });
+    expect(resp.status).toBe(400);
+  });
+
+  it('forwards window params to the client unchanged', async () => {
+    let capturedParams: QueryParams | null = null;
+    srv.replaceClient({
+      async queryCompletedCycles(params) {
+        capturedParams = params;
+        return [];
+      },
+    });
+    await postQuery(srv.port, {
+      appRoleNameFilter: 'myapp',
+      startTimeUtc: '2025-01-15T10:00:00.000Z',
+      durationHours: 12,
+    });
+    expect(capturedParams).not.toBeNull();
+    expect('startTimeUtc' in capturedParams!).toBe(true);
+    if ('startTimeUtc' in capturedParams!) {
+      expect(capturedParams!.startTimeUtc).toBe('2025-01-15T10:00:00.000Z');
+      expect(capturedParams!.durationHours).toBe(12);
+    }
+  });
+});

@@ -328,6 +328,7 @@ export function computeThroughputStats(rows: CompletedCycleRow[]): AppInsightsTh
       checkpointAdvanceSeconds: advanceSeconds,
       checkpointVelocitySourcePerWall:
         totalMs !== null ? advanceSeconds / (totalMs / 1000) : null,
+      cosmosWriteThroughputBatchesPerSec: null,
     };
   });
 
@@ -342,6 +343,7 @@ export function computeThroughputStats(rows: CompletedCycleRow[]): AppInsightsTh
       checkpointAdvanceSeconds,
       checkpointVelocitySourcePerWall:
         checkpointWallMs > 0 ? checkpointAdvanceSeconds / (checkpointWallMs / 1000) : null,
+      cosmosWriteThroughputBatchesPerSec: null,
     },
     iterationMetrics,
   };
@@ -676,6 +678,49 @@ export interface CosmosStats {
   affectedCycleCount: number;
 }
 
+// ── Focused dashboard: distribution helper ─────────────────────────────────
+
+export interface Distribution {
+  count: number;
+  mean: number | null;
+  stdDev: number | null;   // population; 0 when count === 1
+  median: number | null;   // midpoint interpolation on even n
+  p95: number | null;      // nearest-rank: idx = clamp(ceil(0.95*n)-1, 0, n-1)
+  min: number | null;
+  max: number | null;
+}
+
+/**
+ * Compute descriptive statistics over a nullable numeric array.
+ * Filters to finite values. Returns all-null stats with count 0 when empty.
+ *
+ * Population stdDev (not sample). Median uses midpoint interpolation on even n.
+ * p95 uses nearest-rank: idx = clamp(ceil(0.95*n)-1, 0, n-1) — matches the
+ * existing percentile() helper for cross-app consistency.
+ */
+export function describeDistribution(values: Array<number | null>): Distribution {
+  const finite = values.filter((v): v is number => v !== null && Number.isFinite(v)).sort((a, b) => a - b);
+  const n = finite.length;
+  if (n === 0) {
+    return { count: 0, mean: null, stdDev: null, median: null, p95: null, min: null, max: null };
+  }
+  const mean = finite.reduce((s, v) => s + v, 0) / n;
+  const stdDev = n === 1 ? 0 : Math.sqrt(finite.reduce((s, v) => s + (v - mean) ** 2, 0) / n);
+  const median = n % 2 === 1
+    ? finite[Math.floor(n / 2)]!
+    : (finite[n / 2 - 1]! + finite[n / 2]!) / 2;
+  const p95Idx = Math.min(n - 1, Math.max(0, Math.ceil(0.95 * n) - 1));
+  return {
+    count: n,
+    mean,
+    stdDev,
+    median,
+    p95: finite[p95Idx]!,
+    min: finite[0]!,
+    max: finite[n - 1]!,
+  };
+}
+
 /** Compute Cosmos bulk stats with correct labels and partial RU completeness. */
 export function computeCosmosStats(rows: CompletedCycleRow[]): CosmosStats {
   const laneRows = rows.filter((r) => r.rowKind === 'laneAttempt');
@@ -730,4 +775,143 @@ export function computeCosmosStats(rows: CompletedCycleRow[]): CosmosStats {
     maxTerminalRetryAfterMs: maxRetryAfter,
     affectedCycleCount: affectedCount,
   };
+}
+
+// ── Focused dashboard: throughput ─────────────────────────────────────────
+
+export interface FocusedThroughputStats {
+  metrics: ThroughputGaugeMetrics;
+  iterationMetrics: ThroughputGaugeIterationMetrics[];
+}
+
+export function computeFocusedThroughput(rows: CompletedCycleRow[]): FocusedThroughputStats {
+  const laneRows = rows.filter((r) => r.rowKind === 'laneAttempt' && r.outcome === 'success');
+
+  const iterationMetrics: ThroughputGaugeIterationMetrics[] = laneRows.map((row, index) => {
+    const { rawScanRows, kustoMs, mapMs, cosmosSucceeded, writeMs, records, totalMs } = row;
+    const checkpointSrc = row.checkpointProgressSeconds ?? row.committedProgressSeconds ?? 0;
+
+    const kustoReadThroughputRowsPerSec =
+      rawScanRows != null && kustoMs != null && mapMs != null && (kustoMs + mapMs) > 0
+        ? rawScanRows / ((kustoMs + mapMs) / 1000)
+        : null;
+
+    const cosmosWriteThroughputBatchesPerSec =
+      cosmosSucceeded != null && writeMs != null && writeMs > 0
+        ? cosmosSucceeded / (writeMs / 1000)
+        : null;
+
+    const compressionRateRowsPerEvent =
+      rawScanRows != null && records != null && records > 0
+        ? rawScanRows / records
+        : null;
+
+    const checkpointVelocitySourcePerWall =
+      totalMs != null && totalMs > 0
+        ? Math.max(0, checkpointSrc) / (totalMs / 1000)
+        : null;
+
+    const processingThroughputRowsPerSec =
+      rawScanRows != null && totalMs != null && totalMs > 0
+        ? rawScanRows / (totalMs / 1000)
+        : null;
+
+    const eventThroughputEventsPerSec =
+      records != null && totalMs != null && totalMs > 0
+        ? records / (totalMs / 1000)
+        : null;
+
+    const checkpointAdvanceSeconds = Math.max(0, checkpointSrc);
+
+    return {
+      iterationId: `${row.runId}|${row.eventTimeUtc}|${index}`,
+      kustoReadThroughputRowsPerSec,
+      cosmosWriteThroughputBatchesPerSec,
+      compressionRateRowsPerEvent,
+      checkpointVelocitySourcePerWall,
+      processingThroughputRowsPerSec,
+      eventThroughputEventsPerSec,
+      checkpointAdvanceSeconds,
+    };
+  });
+
+  const metrics: ThroughputGaugeMetrics = {
+    kustoReadThroughputRowsPerSec: describeDistribution(iterationMetrics.map((m) => m.kustoReadThroughputRowsPerSec)).mean,
+    cosmosWriteThroughputBatchesPerSec: describeDistribution(iterationMetrics.map((m) => m.cosmosWriteThroughputBatchesPerSec)).mean,
+    compressionRateRowsPerEvent: describeDistribution(iterationMetrics.map((m) => m.compressionRateRowsPerEvent)).mean,
+    checkpointVelocitySourcePerWall: describeDistribution(iterationMetrics.map((m) => m.checkpointVelocitySourcePerWall)).mean,
+    processingThroughputRowsPerSec: describeDistribution(iterationMetrics.map((m) => m.processingThroughputRowsPerSec)).mean,
+    eventThroughputEventsPerSec: describeDistribution(iterationMetrics.map((m) => m.eventThroughputEventsPerSec)).mean,
+    checkpointAdvanceSeconds: iterationMetrics.reduce((s, m) => s + m.checkpointAdvanceSeconds, 0),
+  };
+
+  return { metrics, iterationMetrics };
+}
+
+// ── Focused dashboard: KPIs ───────────────────────────────────────────────
+
+export type BandLevel = 'intraBand' | 'band';
+
+export interface KustoLatencyEntry {
+  level: BandLevel;
+  mode: ExecutionMode;
+  label: string;
+  distribution: Distribution;
+}
+
+export interface FocusedKpis {
+  checkpointVelocity: Distribution;
+  iterationSpeed: Distribution;
+  cosmosLatencyByLevel: Record<BandLevel, Distribution>;
+  kustoLatency: KustoLatencyEntry[];
+}
+
+const LEVEL_LABELS: Record<BandLevel, string> = {
+  intraBand: 'Intra-band',
+  band: 'Band',
+};
+
+const MODE_ORDER: ExecutionMode[] = ['drainSafe', 'legacy', 'unknown'];
+const LEVEL_ORDER: BandLevel[] = ['intraBand', 'band'];
+
+export function computeFocusedKpis(rows: CompletedCycleRow[]): FocusedKpis {
+  const successRows = rows.filter((r) => r.rowKind === 'laneAttempt' && r.outcome === 'success');
+
+  const rowLevel = (row: CompletedCycleRow): BandLevel | null => {
+    if (row.progressKind === 'continuation') return 'intraBand';
+    if (row.progressKind === 'bandCommit') return 'band';
+    return null;
+  };
+
+  const checkpointVelocity = describeDistribution(
+    successRows.map((r) =>
+      r.totalMs != null && r.totalMs > 0
+        ? Math.max(0, r.checkpointProgressSeconds ?? r.committedProgressSeconds ?? 0) / (r.totalMs / 1000)
+        : null,
+    ),
+  );
+  const iterationSpeed = describeDistribution(successRows.map((r) => r.totalMs));
+
+  const cosmosLatencyByLevel: Record<BandLevel, Distribution> = {
+    intraBand: describeDistribution(successRows.filter((r) => rowLevel(r) === 'intraBand').map((r) => r.writeMs)),
+    band: describeDistribution(successRows.filter((r) => rowLevel(r) === 'band').map((r) => r.writeMs)),
+  };
+
+  const kustoLatency: KustoLatencyEntry[] = [];
+  for (const level of LEVEL_ORDER) {
+    for (const mode of MODE_ORDER) {
+      const levelRows = successRows.filter((r) => rowLevel(r) === level && r.executionMode === mode);
+      const distribution = describeDistribution(levelRows.map((r) => r.kustoMs));
+      if (distribution.count >= 1) {
+        kustoLatency.push({
+          level,
+          mode,
+          label: `${LEVEL_LABELS[level]} (${mode})`,
+          distribution,
+        });
+      }
+    }
+  }
+
+  return { checkpointVelocity, iterationSpeed, cosmosLatencyByLevel, kustoLatency };
 }

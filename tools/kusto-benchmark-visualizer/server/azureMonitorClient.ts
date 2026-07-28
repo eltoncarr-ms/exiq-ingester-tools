@@ -198,14 +198,27 @@ export class AzureMonitorQueryClient implements AppInsightsQueryClient {
   }
 
   async queryCompletedCycles(params: QueryParams): Promise<RawCycleRow[]> {
-    const lookbackSeconds = Math.ceil(params.lookbackHours * 60 * 60);
-    const kql = COMPLETED_CYCLE_KQL
-      .replace('{LOOKBACK}', String(params.lookbackHours))
-      .replace('{APP_ROLE}', params.appRoleNameFilter.replace(/'/g, "\\'"));
+    const appRoleEscaped = params.appRoleNameFilter.replace(/'/g, "\\'");
 
-    const result = await this.client.queryWorkspace(this.workspaceId, kql, {
-      duration: `PT${lookbackSeconds}S`,
-    });
+    let kql: string;
+    let timespan: { duration: string } | { startTime: Date; duration: string };
+
+    if ('lookbackHours' in params) {
+      const lookbackSeconds = Math.ceil(params.lookbackHours * 60 * 60);
+      kql = COMPLETED_CYCLE_KQL
+        .replace('{LOOKBACK}', String(params.lookbackHours))
+        .replace('{APP_ROLE}', appRoleEscaped);
+      timespan = { duration: `PT${lookbackSeconds}S` };
+    } else {
+      const durationSeconds = Math.ceil(params.durationHours * 60 * 60);
+      const endTime = new Date(new Date(params.startTimeUtc).getTime() + params.durationHours * 3600000);
+      kql = COMPLETED_CYCLE_KQL
+        .replace('> ago({LOOKBACK} * 1h)', `between(datetime('${params.startTimeUtc}') .. datetime('${endTime.toISOString()}'))`)
+        .replace('{APP_ROLE}', appRoleEscaped);
+      timespan = { startTime: new Date(params.startTimeUtc), duration: `PT${durationSeconds}S` };
+    }
+
+    const result = await this.client.queryWorkspace(this.workspaceId, kql, timespan);
 
     if (result.status !== 'Success') {
       throw new Error(`Azure Monitor query did not succeed: ${JSON.stringify(result)}`);
