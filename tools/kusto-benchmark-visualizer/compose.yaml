@@ -2,6 +2,22 @@ services:
   visualizer:
     build:
       context: .
+      secrets:
+        - npmrc
     image: kusto-benchmark-visualizer:local
     ports:
       - "8080:8080"
+    environment:
+      # Required: Log Analytics workspace ID or App Insights resource ID
+      WORKSPACE_ID: ${WORKSPACE_ID}
+      # Optional: Azure AD tenant ID (needed for cross-tenant access)
+      TENANT_ID: ${TENANT_ID:-}
+      # Optional: override the loopback query server port (default 7432)
+      QUERY_SERVER_PORT: ${QUERY_SERVER_PORT:-7432}
+    # Mount Azure CLI credentials so DefaultAzureCredential / AzureCliCredential works
+    volumes:
+      - ${USERPROFILE:-~}/.azure:/root/.azure:ro
+
+secrets:
+  npmrc:
+    file: ${USERPROFILE:-~}/.npmrc
