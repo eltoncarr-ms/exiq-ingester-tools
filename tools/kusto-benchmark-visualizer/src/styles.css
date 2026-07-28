@@ -172,6 +172,17 @@ button, input { font: inherit; }
 .panel__description { color: var(--text-dim); font-size: 16px; line-height: 1.5; margin: 10px 0 0; max-width: 1180px; }
 .panel__body { padding: 16px; }
 .appinsights-header__actions { align-items: end; }
+.focused-info-bar {
+  align-items: center;
+  background: rgba(11, 16, 32, 0.55);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 20px;
+}
+.focused-info-bar__window { color: var(--text-dim); font-family: var(--mono); font-size: 12px; }
+.focused-info-bar__actions { align-items: center; display: flex; gap: 8px; margin-left: auto; }
 .appinsights-header__field { color: var(--text-dim); display: grid; font-size: 10px; font-weight: 700; gap: 3px; min-width: 82px; }
 .appinsights-header__field--role { min-width: 190px; }
 .appinsights-header__field input {
@@ -394,7 +405,7 @@ button, input { font: inherit; }
 .event-marker--checkpoint { border-color: rgba(244, 114, 182, 0.34); }
 .event-marker--blocked { border-color: rgba(251, 113, 133, 0.4); }
 .event-marker--duplicate { border-color: rgba(167, 139, 250, 0.4); }
-.gauge-grid { display: grid; gap: 16px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.gauge-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
 .gauge-card {
   align-items: center;
   background: rgba(11, 16, 32, 0.55);

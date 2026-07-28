@@ -31,17 +31,23 @@ function fmtDist(
   };
 }
 
-const TABLE_STYLE: React.CSSProperties = { borderCollapse: 'collapse', width: '100%' };
+const TABLE_STYLE: React.CSSProperties = {
+  borderCollapse: 'collapse',
+  tableLayout: 'fixed',
+  width: '100%',
+};
 const TH_STYLE: React.CSSProperties = {
   textAlign: 'left',
   padding: '0.25rem 0.5rem',
   borderBottom: '1px solid var(--border, #3f3f46)',
   whiteSpace: 'nowrap',
 };
+const TH_FIRST_STYLE: React.CSSProperties = { ...TH_STYLE, width: '210px', minWidth: '210px' };
 const TD_STYLE: React.CSSProperties = {
   padding: '0.25rem 0.5rem',
   fontVariantNumeric: 'tabular-nums',
 };
+const TD_FIRST_STYLE: React.CSSProperties = { ...TD_STYLE, width: '210px', minWidth: '210px' };
 const SUBTITLE_STYLE: React.CSSProperties = {
   fontWeight: 600,
   fontSize: '0.875rem',
@@ -57,7 +63,7 @@ function StatTableHead() {
   return (
     <thead>
       <tr>
-        <th style={TH_STYLE}>Level / Mode</th>
+        <th style={TH_FIRST_STYLE}>Level / Mode</th>
         <th style={TH_STYLE}>Count</th>
         <th style={TH_STYLE}>Min</th>
         <th style={TH_STYLE}>Mean</th>
@@ -75,7 +81,7 @@ type FmtDistResult = ReturnType<typeof fmtDist>;
 function DistRow({ label, dist }: { label: string; dist: FmtDistResult }) {
   return (
     <tr>
-      <td style={TD_STYLE}>{label}</td>
+      <td style={TD_FIRST_STYLE}>{label}</td>
       <td style={TD_STYLE}>{dist.count}</td>
       <td style={TD_STYLE}>{dist.min}</td>
       <td style={TD_STYLE}>{dist.mean}</td>
@@ -110,6 +116,18 @@ export function FocusedDashboardPage() {
 
   // datetime-local yields local wall time; new Date(local).toISOString() converts to UTC.
   const anchorIso = anchor ? new Date(anchor).toISOString() : null;
+
+  // Allow pasting UTC ISO strings (e.g. "2026-07-27T15:35:45.781Z") directly into the
+  // datetime-local input by converting them to the local-time string the input expects.
+  const handleAnchorPaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData('text').trim();
+    const parsed = new Date(text);
+    if (!Number.isFinite(parsed.getTime())) return;
+    e.preventDefault();
+    // Shift UTC epoch to local wall-clock time, then format as YYYY-MM-DDTHH:MM.
+    const localMs = parsed.getTime() - parsed.getTimezoneOffset() * 60_000;
+    setAnchor(new Date(localMs).toISOString().slice(0, 16));
+  }, []);
 
   const handleDiscover = useCallback(async () => {
     if (!anchorIso || !appRole.trim()) return;
@@ -233,9 +251,10 @@ export function FocusedDashboardPage() {
             <input
               className="input input--sm"
               type="datetime-local"
-              title="Anchor time (local — converted to UTC)"
+              title="Anchor time (local — converted to UTC). You can also paste an ISO UTC string."
               value={anchor}
               onChange={(e) => setAnchor(e.target.value)}
+              onPaste={handleAnchorPaste}
               disabled={phase === 'discovering' || phase === 'fetching'}
             />
             <span className="input-label__hint">(UTC)</span>
@@ -249,46 +268,49 @@ export function FocusedDashboardPage() {
           >
             {phase === 'discovering' ? 'Discovering…' : 'Discover'}
           </button>
-          {/* Window info + extend controls, shown after discovery */}
-          {phase !== 'idle' && windowStart && discoveredDuration !== null && (
-            <>
-              <span className="appinsights-header__info">
-                Window: {new Date(windowStart).toISOString().replace('T', ' ').slice(0, 19)}Z
-                &nbsp;·&nbsp;{discoveredDuration.toFixed(1)}h discovered
-              </span>
-              <input
-                className="input input--sm"
-                type="number"
-                min={discoveredDuration}
-                max={168}
-                step={0.5}
-                value={durationHours}
-                onChange={handleDurationChange}
-                disabled={phase === 'fetching'}
-                title="Fetch window duration (hours)"
-                style={{ width: '6rem' }}
-              />
-              <span className="input-label__hint">h</span>
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={handleFetch}
-                disabled={phase === 'fetching' || durationHours <= 0}
-              >
-                {phase === 'fetching' ? 'Fetching…' : 'Fetch'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--sm btn--ghost"
-                onClick={handleClear}
-                disabled={phase === 'discovering' || phase === 'fetching'}
-              >
-                Clear
-              </button>
-            </>
-          )}
         </div>
       </header>
+
+      {/* Window info bar — shown after discovery */}
+      {phase !== 'idle' && windowStart && discoveredDuration !== null && (
+        <div className="focused-info-bar">
+          <span className="focused-info-bar__window">
+            Window: {new Date(windowStart).toISOString().replace('T', ' ').slice(0, 19)}Z
+            &nbsp;·&nbsp;{discoveredDuration.toFixed(1)}h discovered
+          </span>
+          <div className="focused-info-bar__actions">
+            <input
+              className="input input--sm"
+              type="number"
+              min={discoveredDuration}
+              max={168}
+              step={0.5}
+              value={durationHours}
+              onChange={handleDurationChange}
+              disabled={phase === 'fetching'}
+              title="Fetch window duration (hours)"
+              style={{ width: '6rem' }}
+            />
+            <span className="input-label__hint">h</span>
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={handleFetch}
+              disabled={phase === 'fetching' || durationHours <= 0}
+            >
+              {phase === 'fetching' ? 'Fetching…' : 'Fetch'}
+            </button>
+            <button
+              type="button"
+              className="btn btn--sm btn--ghost"
+              onClick={handleClear}
+              disabled={phase === 'discovering' || phase === 'fetching'}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Truncation warning */}
       {truncated && (
